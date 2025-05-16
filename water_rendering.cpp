@@ -26,7 +26,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 
 unsigned int loadCubemap(std::vector<std::string> faces);
-void renderSkybox(const glm::mat4& view, const glm::mat4& projection);
+void renderSkybox();
 
 // Global variables
 unsigned int groundVAO = 0, waterVAO = 0;
@@ -188,16 +188,13 @@ int main() {
         glClearColor(0.1f, 0.3f, 0.5f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        renderSkybox();
         renderGround();
         renderWaterSurface(time);
         renderFoamTexture();
         renderExtraEffects(time);
         renderScene(time);
         
-        glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-        glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
-        renderSkybox(view, projection);
-
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -384,12 +381,14 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
 }
 
 // --- 0. Render Skybox ---
-void renderSkybox(const glm::mat4& view, const glm::mat4& projection) {
+void renderSkybox() {
     glDepthFunc(GL_LEQUAL);  // change it to LEQUAL and make sure skybox passes the depth test
     
     skyboxShader->use();
     // remove the panning component of the view and keep only the rotation, so that the skybox always wraps around the camera
+    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
     glm::mat4 viewNoTranslate = glm::mat4(glm::mat3(view));
+    glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
     skyboxShader->setMat4("view", viewNoTranslate);
     skyboxShader->setMat4("projection", projection);
     
