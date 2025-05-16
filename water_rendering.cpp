@@ -27,7 +27,7 @@ GLFWwindow* window;
 std::vector<glm::vec3> waterVertices;
 Shader *waterShader, *groundShader;
 
-const int GRID_SIZE = 100;
+const int GRID_SIZE = 300;
 
 // Camera
 glm::vec3 cameraPos = glm::vec3(0.0f, 0.5f, 2.0f);
@@ -81,10 +81,10 @@ void initOpenGL() {
 
     // Ground quad setup
     float groundVertices[] = {
-        -1.0f, 0.0f, -1.0f,
-         1.0f, 0.0f, -1.0f,
-         1.0f, 0.0f,  1.0f,
-        -1.0f, 0.0f,  1.0f
+        -1.0f, -0.2f, -1.0f,
+         1.0f, -0.2f, -1.0f,
+         1.0f, -0.2f,  1.0f,
+        -1.0f, -0.2f,  1.0f
     };
     glGenVertexArrays(1, &groundVAO);
     glGenBuffers(1, &groundVBO);

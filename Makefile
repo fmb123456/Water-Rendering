@@ -13,10 +13,12 @@ OBJ = $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(patsubst %.c,$(BUILD_DIR)/%.o,$(SRC)))
 
 GLFW_LIB = external/glfw/build/src/libglfw3.a
 
+SHADER = water.frag water.vert ground.frag ground.vert
+
 all: $(TARGET)
 
-$(TARGET): $(OBJ) $(GLFW_LIB)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+$(TARGET): $(OBJ) $(GLFW_LIB) $(SHADER)
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJ) $(GLFW_LIB) $(LDFLAGS)
 
 $(BUILD_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
