@@ -9,6 +9,8 @@ uniform vec3 viewPos;
 uniform vec3 lightPos;
 uniform vec3 lightColor;
 
+uniform samplerCube skybox;
+
 void main() {
     vec3 lightDir = normalize(lightPos - worldPos);
     vec3 viewDir = normalize(viewPos - worldPos);
@@ -23,6 +25,11 @@ void main() {
     vec3 specular = spec * lightColor;
 
     vec3 result = (ambient + diffuse) * waterColor + specular;
+
+    vec3 R = reflect(-viewDir, normal);
+    vec3 skyColor = texture(skybox, R).rgb;
+
+    result = 0.5 * (result + skyColor);
 
     FragColor = vec4(result, 1.0);
 }

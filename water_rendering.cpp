@@ -401,6 +401,9 @@ void renderSkybox(const glm::mat4& view, const glm::mat4& projection) {
     glBindVertexArray(0);
 
     glDepthFunc(GL_LESS);  // restore deep test mode
+
+    waterShader->use();
+    waterShader->setFloat("skybox", 0);
 }
 
 unsigned int loadCubemap(std::vector<std::string> faces) {
@@ -449,15 +452,17 @@ void renderGround() {
 
 // --- 2. Render Water Surface ---
 void renderWaterSurface(float time) {
-    std::vector<glm::vec3> animatedVertices = waterVertices;
     glBindBuffer(GL_ARRAY_BUFFER, waterVBO);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, animatedVertices.size() * sizeof(glm::vec3), &animatedVertices[0]);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, waterVertices.size() * sizeof(glm::vec3), &waterVertices[0]);
 
     wave.updateFrequencyDomain(time / 10.0);
     wave.computeHeightMap();
     wave.computeNormalMap(wave.L / wave.N);
 
     waterShader->use();
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
 
     glActiveTexture(GL_TEXTURE1);
     wave.uploadHeightToGPU(heightTex);
@@ -479,7 +484,7 @@ void renderWaterSurface(float time) {
     waterShader->setVec3("lightColor", glm::vec3(1.0f, 1.0f, 1.0f));
     glBindVertexArray(waterVAO);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    glDrawArrays(GL_TRIANGLES, 0, animatedVertices.size());
+    glDrawArrays(GL_TRIANGLES, 0, waterVertices.size());
 }
 
 // --- 3. Render Foam Texture ---
