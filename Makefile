@@ -1,7 +1,7 @@
 CXX = g++
 CC  = gcc
-CXXFLAGS = -Iinclude -Iexternal/glad -Iexternal/glm -Iexternal/glfw/include
-LDFLAGS = -ldl -lGL -lX11 -lpthread -lXrandr -lXi
+CXXFLAGS = -Iinclude -Iexternal/glad -Iexternal/glm -Iexternal/glfw/include -I external/fftw/include
+LDFLAGS = -ldl -lGL -lX11 -lpthread -lXrandr -lXi -Lexternal/fftw/lib -lfftw3f
 BUILD_DIR = build
 TARGET = water_rendering
 

@@ -7,6 +7,9 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <complex>
+#include <random>
+#include <fftw3.h>
 #include "shader.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -36,6 +39,8 @@ unsigned int skyboxVAO, skyboxVBO;
 unsigned int cubemapTexture;
 Shader *skyboxShader;
 
+unsigned int heightTex, normalTex;
+
 const int GRID_SIZE = 300;
 
 // Camera
@@ -45,6 +50,125 @@ glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
 float lastX = 400.0f, lastY = 300.0f;
 bool firstMouse = true;
 float yaw = -90.0f, pitch = 0.0f, fov = 45.0f;
+
+// Wave Simulate
+struct Wave {
+    using Complex = std::complex<float>;
+
+    const int N = 100;
+    const float L = 2.0f;
+    const float A = 0.05f;
+    const float G = 9.81f;
+    const glm::vec2 wind = glm::vec2(2.0f, 2.0f);
+
+    std::vector<Complex> h0;
+    std::vector<Complex> hkt;
+    std::vector<float> heightMap;
+    std::vector<glm::vec3> normalMap;
+
+    Wave(): h0(N * N), hkt(N * N), heightMap(N * N), normalMap(N * N) {
+        initializeH0();
+    }
+
+    float gaussianRandom() {
+        static std::default_random_engine eng;
+        static std::normal_distribution<float> dist(0.0f, 1.0f);
+        return dist(eng);
+    }
+
+    float phillips(glm::vec2 k) {
+        float kLen = glm::length(k);
+        if (kLen < 1e-6f) return 0.0f;
+
+        float kLen2 = kLen * kLen;
+        float kLen4 = kLen2 * kLen2;
+        glm::vec2 kNorm = glm::normalize(k);
+        float kDotW = glm::dot(kNorm, glm::normalize(wind));
+        float Lw = glm::length(wind);
+        float L = (Lw * Lw) / G;
+        float L2 = L * L;
+        float damping = 0.001f;
+        float l2 = (L * damping) * (L * damping);
+
+        return A * exp(-1.0f / (kLen2 * L2)) / kLen4 * kDotW * kDotW * exp(-kLen2 * l2);
+    }
+
+    glm::vec2 getWaveVector(int n, int m) {
+        float kx = 2.0f * glm::pi<float>() * (m - N / 2) / L;
+        float ky = 2.0f * glm::pi<float>() * (n - N / 2) / L;
+        return glm::vec2(kx, ky);
+    }
+
+    void initializeH0() {
+        for (int n = 0; n < N; ++n) {
+            for (int m = 0; m < N; ++m) {
+                glm::vec2 k = getWaveVector(n, m);
+                float P = phillips(k);
+                float r1 = gaussianRandom();
+                float r2 = gaussianRandom();
+                h0[n * N + m] = Complex(r1, r2) * sqrt(P / 2.0f);
+            }
+        }
+    }
+
+    void updateFrequencyDomain(float t) {
+        for (int n = 0; n < N; ++n) {
+            for (int m = 0; m < N; ++m) {
+                glm::vec2 k = getWaveVector(n, m);
+                int idx = n * N + m;
+                Complex h0k = h0[idx];
+                int mi = (N - m) % N, ni = (N - n) % N;
+                Complex h0minusk = std::conj(h0[ni * N + mi]);
+                float kLen = glm::length(k);
+                float omega = sqrt(G * kLen);
+                Complex e = exp(Complex(0, omega * t));
+                hkt[idx] = h0k * e + h0minusk * std::conj(e);
+            }
+        }
+    }
+
+    void computeHeightMap() {
+        fftwf_complex* in = reinterpret_cast<fftwf_complex*>(hkt.data());
+        fftwf_complex* out = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * N * N);
+        fftwf_plan plan = fftwf_plan_dft_2d(N, N, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
+        fftwf_execute(plan);
+        float Min = 0.0;
+        for (int i = 0; i < N * N; ++i) {
+            heightMap[i] = out[i][0];
+            heightMap[i] = abs(heightMap[i]);
+        }
+        fftwf_destroy_plan(plan);
+        fftwf_free(out);
+    }
+
+    void computeNormalMap(float spacing) {
+        for (int z = 0; z < N; ++z) {
+            for (int x = 0; x < N; ++x) {
+                int idx = z * N + x;
+                float hL = heightMap[z * N + (x > 0 ? x - 1 : x)];
+                float hR = heightMap[z * N + (x < N - 1 ? x + 1 : x)];
+                float hD = heightMap[(z > 0 ? z - 1 : z) * N + x];
+                float hU = heightMap[(z < N - 1 ? z + 1 : z) * N + x];
+                float dx = (hR - hL) / (2.0f * spacing);
+                float dz = (hU - hD) / (2.0f * spacing);
+                normalMap[idx] = glm::normalize(glm::vec3(-dx, 1.0f, -dz));
+            }
+        }
+    }
+    void uploadHeightToGPU(GLuint texID) {
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, N, N, GL_RED, GL_FLOAT, heightMap.data());
+    }
+
+    void uploadNormalsToGPU(GLuint texID) {
+        std::vector<glm::vec3> rgbData(N * N);
+        for (int i = 0; i < N * N; ++i)
+            rgbData[i] = normalMap[i] * 0.5f + 0.5f;
+
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, N, N, GL_RGB, GL_FLOAT, rgbData.data());
+    }
+} wave;
 
 // --- Main ---
 int main() {
@@ -200,6 +324,20 @@ void initOpenGL() {
     
     // load skybox shader
     skyboxShader = new Shader("skybox.vert", "skybox.frag");
+
+
+    // init wave shape texture
+    glGenTextures(1, &heightTex);
+    glBindTexture(GL_TEXTURE_2D, heightTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, wave.N, wave.N, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glGenTextures(1, &normalTex);
+    glBindTexture(GL_TEXTURE_2D, normalTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, wave.N, wave.N, 0, GL_RGB, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
 }
 
 // --- Input Processing ---
@@ -312,13 +450,23 @@ void renderGround() {
 // --- 2. Render Water Surface ---
 void renderWaterSurface(float time) {
     std::vector<glm::vec3> animatedVertices = waterVertices;
-    for (auto& v : animatedVertices) {
-        v.y = 0.05f * sinf(10.0f * v.x + time) + 0.05f * cosf(10.0f * v.z + time);
-    }
     glBindBuffer(GL_ARRAY_BUFFER, waterVBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, animatedVertices.size() * sizeof(glm::vec3), &animatedVertices[0]);
 
+    wave.updateFrequencyDomain(time / 10.0);
+    wave.computeHeightMap();
+    wave.computeNormalMap(wave.L / wave.N);
+
     waterShader->use();
+
+    glActiveTexture(GL_TEXTURE1);
+    wave.uploadHeightToGPU(heightTex);
+    glUniform1i(glGetUniformLocation(waterShader->ID, "heightMap"), 1);
+
+    glActiveTexture(GL_TEXTURE2);
+    wave.uploadNormalsToGPU(normalTex);
+    glUniform1i(glGetUniformLocation(waterShader->ID, "normalMap"), 2);
+
     glm::mat4 model = glm::mat4(1.0f);
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
     glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);

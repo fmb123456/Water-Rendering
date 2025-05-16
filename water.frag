@@ -24,9 +24,5 @@ void main() {
 
     vec3 result = (ambient + diffuse) * waterColor + specular;
 
-    // white foam effect at higher y positions
-    if (worldPos.y > 0.07)
-        result += vec3(0.8);
-
     FragColor = vec4(result, 1.0);
 }
