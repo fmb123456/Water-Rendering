@@ -17,6 +17,8 @@ void renderFoamTexture();
 void renderExtraEffects(float time);
 void renderScene(float time);
 void processInput(GLFWwindow* window);
+void mouse_callback(GLFWwindow* window, double xpos, double ypos);
+void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 
 // Global variables
 unsigned int groundVAO = 0, waterVAO = 0;
@@ -27,11 +29,23 @@ Shader *waterShader, *groundShader;
 
 const int GRID_SIZE = 100;
 
+// Camera
+glm::vec3 cameraPos = glm::vec3(0.0f, 0.5f, 2.0f);
+glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+float lastX = 400.0f, lastY = 300.0f;
+bool firstMouse = true;
+float yaw = -90.0f, pitch = 0.0f, fov = 45.0f;
+
 // --- Main ---
 int main() {
     initOpenGL();
     groundShader = new Shader("ground.vert", "ground.frag");
     waterShader = new Shader("water.vert", "water.frag");
+
+    glfwSetCursorPosCallback(window, mouse_callback);
+    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     float time = 0.0f;
     while (!glfwWindowShouldClose(window)) {
@@ -109,13 +123,56 @@ void initOpenGL() {
 
 // --- Input Processing ---
 void processInput(GLFWwindow* window) {
+    const float cameraSpeed = 2.5f * 0.016f;
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+        cameraPos += cameraSpeed * cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        cameraPos -= cameraSpeed * cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+        cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+}
+
+void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
+    if (firstMouse) {
+        lastX = xpos;
+        lastY = ypos;
+        firstMouse = false;
+    }
+    float xoffset = xpos - lastX;
+    float yoffset = lastY - ypos;
+    lastX = xpos;
+    lastY = ypos;
+    float sensitivity = 0.1f;
+    xoffset *= sensitivity;
+    yoffset *= sensitivity;
+    yaw += xoffset;
+    pitch += yoffset;
+    if (pitch > 89.0f) pitch = 89.0f;
+    if (pitch < -89.0f) pitch = -89.0f;
+    glm::vec3 front;
+    front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+    front.y = sin(glm::radians(pitch));
+    front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+    cameraFront = glm::normalize(front);
+}
+
+void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+    glViewport(0, 0, width, height);
 }
 
 // --- 1. Render Ground ---
 void renderGround() {
     groundShader->use();
+    glm::mat4 model = glm::mat4(1.0f);
+    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+    glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+    groundShader->setMat4("model", model);
+    groundShader->setMat4("view", view);
+    groundShader->setMat4("projection", projection);
     glBindVertexArray(groundVAO);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
@@ -127,12 +184,20 @@ void renderWaterSurface(float time) {
     for (auto& v : animatedVertices) {
         v.y = 0.05f * sinf(10.0f * v.x + time) + 0.05f * cosf(10.0f * v.z + time);
     }
-
     glBindBuffer(GL_ARRAY_BUFFER, waterVBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, animatedVertices.size() * sizeof(glm::vec3), &animatedVertices[0]);
 
     waterShader->use();
+    glm::mat4 model = glm::mat4(1.0f);
+    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+    glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+    waterShader->setMat4("model", model);
+    waterShader->setMat4("view", view);
+    waterShader->setMat4("projection", projection);
     waterShader->setFloat("time", time);
+    waterShader->setVec3("lightPos", glm::vec3(2.0f, 2.0f, 2.0f));
+    waterShader->setVec3("viewPos", cameraPos);
+    waterShader->setVec3("lightColor", glm::vec3(1.0f, 1.0f, 1.0f));
     glBindVertexArray(waterVAO);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDrawArrays(GL_TRIANGLES, 0, animatedVertices.size());
