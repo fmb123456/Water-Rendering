@@ -11,8 +11,10 @@
 #include <random>
 #include <fftw3.h>
 #include "shader.h"
+#define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "tiny_gltf.h"
 
 // --- Function Prototypes ---
 void initOpenGL();
@@ -21,6 +23,7 @@ void renderWaterSurface(float time);
 void renderFoamTexture();
 void renderExtraEffects(float time);
 void renderScene(float time);
+void renderPool();
 void processInput(GLFWwindow* window);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -38,6 +41,9 @@ Shader *waterShader, *groundShader;
 unsigned int skyboxVAO, skyboxVBO;
 unsigned int cubemapTexture;
 Shader *skyboxShader;
+
+unsigned int poolVAO, poolVBO, poolEBO, poolIndexCount;
+Shader *poolShader;
 
 unsigned int heightTex, normalTex;
 
@@ -194,6 +200,7 @@ int main() {
         renderFoamTexture();
         renderExtraEffects(time);
         renderScene(time);
+        renderPool();
         
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -335,6 +342,55 @@ void initOpenGL() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
+    // pool
+    tinygltf::Model model;
+    tinygltf::TinyGLTF loader;
+    std::string err, warn;
+    bool ret = loader.LoadBinaryFromFile(&model, &err, &warn, "model/terrain.glb");
+    auto prim = model.meshes[0].primitives[0];
+
+    const auto& posAccessor = model.accessors[prim.attributes.at("POSITION")];
+    const auto& posView = model.bufferViews[posAccessor.bufferView];
+    const auto& posBuffer = model.buffers[posView.buffer];
+    const float* positions = reinterpret_cast<const float*>(&posBuffer.data[posView.byteOffset + posAccessor.byteOffset]);
+
+    // Normals (optional)
+    const float* normals = nullptr;
+    if (prim.attributes.count("NORMAL")) {
+        auto &nAccessor = model.accessors[prim.attributes.at("NORMAL")];
+        auto &nView = model.bufferViews[nAccessor.bufferView];
+        auto &nBuffer = model.buffers[nView.buffer];
+        normals = reinterpret_cast<const float*>(&nBuffer.data[nView.byteOffset + nAccessor.byteOffset]);
+    }
+
+    // Indices
+    const auto& idxAccessor = model.accessors[prim.indices];
+    const auto& idxView = model.bufferViews[idxAccessor.bufferView];
+    const auto& idxBuffer = model.buffers[idxView.buffer];
+    const unsigned short* indices = reinterpret_cast<const unsigned short*>(&idxBuffer.data[idxView.byteOffset + idxAccessor.byteOffset]);
+    poolIndexCount = idxAccessor.count;
+
+    // Upload to GPU
+    glGenVertexArrays(1, &poolVAO);
+    glBindVertexArray(poolVAO);
+    glGenBuffers(1, &poolVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, poolVBO);
+    glBufferData(GL_ARRAY_BUFFER, posAccessor.count * 3 * sizeof(float), positions, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glEnableVertexAttribArray(0);
+    if (normals) {
+        GLuint nbo;
+        glGenBuffers(1, &nbo);
+        glBindBuffer(GL_ARRAY_BUFFER, nbo);
+        glBufferData(GL_ARRAY_BUFFER, posAccessor.count * 3 * sizeof(float), normals, GL_STATIC_DRAW);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glEnableVertexAttribArray(1);
+    }
+    glGenBuffers(1, &poolEBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, poolEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, poolIndexCount * sizeof(unsigned short), indices, GL_STATIC_DRAW);
+
+    poolShader = new Shader("pool.vert", "pool.frag");
 }
 
 // --- Input Processing ---
@@ -434,6 +490,25 @@ unsigned int loadCubemap(std::vector<std::string> faces) {
     return textureID;
 }
 
+void renderPool() {
+    glDepthFunc(GL_LEQUAL);  // change it to LEQUAL and make sure skybox passes the depth test
+    poolShader->use();
+
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::scale(model, glm::vec3(0.12));
+    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+    glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+    poolShader->setMat4("model", model);
+    poolShader->setMat4("projection", projection);
+    poolShader->setMat4("view", view);
+    poolShader->setVec3("viewPos", cameraPos);
+    glm::mat4 modelMat = glm::mat4(1.0f);
+
+    glBindVertexArray(poolVAO);
+    glDrawElements(GL_TRIANGLES, poolIndexCount, GL_UNSIGNED_SHORT, nullptr);
+
+    glDepthFunc(GL_LESS);  // restore deep test mode
+}
 
 // --- 1. Render Ground ---
 void renderGround() {
