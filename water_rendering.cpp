@@ -412,11 +412,25 @@ void loadObject(object &obj, std::string filePath) {
 
     // Normals (optional)
     const float* normals = nullptr;
+    const unsigned char* joints = nullptr;
+    const float* weights = nullptr;
     if (prim.attributes.count("NORMAL")) {
         auto &nAccessor = obj.model.accessors[prim.attributes.at("NORMAL")];
         auto &nView = obj.model.bufferViews[nAccessor.bufferView];
         auto &nBuffer = obj.model.buffers[nView.buffer];
         normals = reinterpret_cast<const float*>(&nBuffer.data[nView.byteOffset + nAccessor.byteOffset]);
+    }
+    if (prim.attributes.count("JOINTS_0")) {
+        auto &nAccessor = obj.model.accessors[prim.attributes.at("JOINTS_0")];
+        auto &nView = obj.model.bufferViews[nAccessor.bufferView];
+        auto &nBuffer = obj.model.buffers[nView.buffer];
+        joints = reinterpret_cast<const unsigned char*>(&nBuffer.data[nView.byteOffset + nAccessor.byteOffset]);
+    }
+    if (prim.attributes.count("WEIGHTS_0")) {
+        auto &nAccessor = obj.model.accessors[prim.attributes.at("WEIGHTS_0")];
+        auto &nView = obj.model.bufferViews[nAccessor.bufferView];
+        auto &nBuffer = obj.model.buffers[nView.buffer];
+        weights = reinterpret_cast<const float*>(&nBuffer.data[nView.byteOffset + nAccessor.byteOffset]);
     }
 
     // Indices
@@ -442,20 +456,25 @@ void loadObject(object &obj, std::string filePath) {
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
         glEnableVertexAttribArray(1);
     }
+    if (joints) {
+        GLuint nbo;
+        glGenBuffers(1, &nbo);
+        glBindBuffer(GL_ARRAY_BUFFER, nbo);
+        glBufferData(GL_ARRAY_BUFFER, posAccessor.count * 4 * sizeof(unsigned char), joints, GL_STATIC_DRAW);
+        glVertexAttribIPointer(2, 4, GL_UNSIGNED_BYTE, 0, nullptr);
+        glEnableVertexAttribArray(2);
+    }
+    if (weights) {
+        GLuint nbo;
+        glGenBuffers(1, &nbo);
+        glBindBuffer(GL_ARRAY_BUFFER, nbo);
+        glBufferData(GL_ARRAY_BUFFER, posAccessor.count * 4 * sizeof(float), weights, GL_STATIC_DRAW);
+        glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glEnableVertexAttribArray(3);
+    }
     glGenBuffers(1, &obj.ebo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, obj.ebo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, obj.indexCount * sizeof(unsigned short), indices, GL_STATIC_DRAW);
-
-    std::vector <int> indices_int;
-    for (int i = 0; i < obj.indexCount; ++i) {
-        indices_int.push_back(indices[i]);
-    }
-    GLuint tmp;
-    glGenBuffers(1, &tmp);
-    glBindBuffer(GL_ARRAY_BUFFER, tmp);
-    glBufferData(GL_ARRAY_BUFFER, obj.indexCount * sizeof(int), &indices_int[0], GL_STATIC_DRAW);
-    glVertexAttribIPointer(3, 1, GL_INT, 0, nullptr);
-    glEnableVertexAttribArray(3);
 }
 
 // --- Input Processing ---
@@ -591,61 +610,6 @@ VecF interpolate(const AnimSampler& as, float t) {
     return out;
 }
 
-glm::mat4 quatToMat4(float x, float y, float z, float w) {
-    float x2 = x + x,  y2 = y + y,  z2 = z + z;
-    float xx = x * x2,  xy = x * y2,  xz = x * z2;
-    float yy = y * y2,  yz = y * z2,  zz = z * z2;
-    float wx = w * x2,  wy = w * y2,  wz = w * z2;
-
-    glm::mat4 m;
-    m[0][0] = 1.0f - (yy + zz);
-    m[0][1] =        xy + wz;
-    m[0][2] =        xz - wy;
-    m[0][3] = 0.0f;
-
-    m[1][0] =        xy - wz;
-    m[1][1] = 1.0f - (xx + zz);
-    m[1][2] =        yz + wx;
-    m[1][3] = 0.0f;
-
-    m[2][0] =        xz + wy;
-    m[2][1] =        yz - wx;
-    m[2][2] = 1.0f - (xx + yy);
-    m[2][3] = 0.0f;
-
-    m[3][0] = 0.0f;
-    m[3][1] = 0.0f;
-    m[3][2] = 0.0f;
-    m[3][3] = 1.0f;
-    return m;
-}
-
-glm::mat4 get_mat(float xR, float yR, float zR, float wR, float xT, float yT, float zT, float wT) {
-    float t0 = 2.0 * (-wT * xR + xT * wR - yT * zR + zT * yR);
-    float t1 = 2.0 * (-wT * yR + xT * zR + yT * wR - zT * xR);
-    float t2 = 2.0 * (-wT * zR - xT * yR + yT * xR + zT * wR);
-
-    glm::mat4 m;
-    m[0][0] = 1.0 - (2.0 * yR * yR) - (2.0 * zR * zR);
-    m[0][1] = (2.0 * xR * yR) + (2.0 * wR * zR);
-    m[0][2] = (2.0 * xR * zR) - (2.0 * wR * yR);
-    m[0][3] = 0;
-    m[1][0] = (2.0 * xR * yR) - (2.0 * wR * zR);
-    m[1][1] = 1.0 - (2.0 * xR * xR) - (2.0 * zR * zR);
-    m[1][2] = (2.0 * yR * zR) + (2.0 * wR * xR);
-    m[1][3] = 0;
-    m[2][0] = (2.0 * xR * zR) + (2.0 * wR * yR);
-    m[2][1] = (2.0 * yR * zR) - (2.0 * wR * xR);
-    m[2][2] = 1.0 - (2.0 * xR * xR) - (2.0 * yR * yR);
-    m[2][3] = 0;
-    m[3][0] = t0;
-    m[3][1] = t1;
-    m[3][2] = t2;
-    m[3][3] = 1;
-
-    return m;
-}
-
 void renderBird() {
     glDepthFunc(GL_LEQUAL);  // change it to LEQUAL and make sure skybox passes the depth test
     birdShader->use();
@@ -665,18 +629,58 @@ void renderBird() {
             node.scale = { val[0], val[1], val[2] };
         }
     }
-    
-    const auto& root = bird.model.nodes[0];
-    glm::mat4 model = glm::mat4(1.0f);
-    // apply translation
-    model = glm::translate(model, glm::vec3(root.translation[0], root.translation[1], root.translation[2]));
-    model *= glm::mat4_cast(glm::quat(root.rotation[3], root.rotation[0], root.rotation[1], root.rotation[2]));
-    model = glm::scale(model, glm::vec3(root.scale[0], root.scale[1], root.scale[2]));
 
-    glm::mat4 global = glm::mat4(1.0f);
-    global = glm::scale(global, glm::vec3(0.12f));
-    global = glm::translate(global, glm::vec3(0.0f, 10.0f, 0.0f));
-    model = global * model;
+    std::vector<glm::mat4> nodeMatrices(bird.model.nodes.size(), glm::mat4(1.0f));
+
+    std::function<void(int, const glm::mat4&)> computeNode = [&](int idx, const glm::mat4& parentMatrix) {
+        const auto& node = bird.model.nodes[idx];
+        glm::mat4 local = glm::mat4(1.0f);
+        if (idx < 9) {
+            local = glm::translate(local, glm::vec3(
+                node.translation[0], node.translation[1], node.translation[2]
+            ));
+            local *= glm::mat4_cast(glm::quat(
+                node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]
+            ));
+            local = glm::scale(local, glm::vec3(
+                node.scale[0], node.scale[1], node.scale[2]
+            ));
+        }
+        glm::mat4 world = parentMatrix * local;
+        nodeMatrices[idx] = world;
+        for (int child : node.children) {
+            computeNode(child, world);
+        }
+    };
+
+    for (int rootIndex : bird.model.scenes[0].nodes) {
+        computeNode(rootIndex, glm::mat4(1.0f));
+    }
+
+    const auto& skin = bird.model.skins[0];
+    std::vector<glm::mat4> invBindMats(skin.joints.size());
+    {
+        const auto& ibAccessor = bird.model.accessors[skin.inverseBindMatrices];
+        const auto& ibView     = bird.model.bufferViews[ibAccessor.bufferView];
+        const auto& ibBuffer   = bird.model.buffers[ibView.buffer];
+        const float* ibData = reinterpret_cast<const float*>(
+              &ibBuffer.data[ibView.byteOffset + ibAccessor.byteOffset]
+        );
+        for (size_t i = 0; i < skin.joints.size(); ++i) {
+            invBindMats[i] = glm::make_mat4(&ibData[i * 16]);
+        }
+    }
+
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::scale(model, glm::vec3(0.12f));
+    model = glm::translate(model, glm::vec3(0.0f, 10.0f, 0.0f));
+
+    std::vector<glm::mat4> jointMats(skin.joints.size());
+    for (size_t i = 0; i < skin.joints.size(); ++i) {
+        int nodeIndex = skin.joints[i];
+        glm::mat4 world = nodeMatrices[nodeIndex];
+        jointMats[i] = model * world * invBindMats[i];
+    }
 
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
     glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
@@ -684,6 +688,8 @@ void renderBird() {
     birdShader->setMat4("projection", projection);
     birdShader->setMat4("view", view);
     birdShader->setVec3("viewPos", cameraPos);
+    GLint loc = glGetUniformLocation(birdShader->ID, "uMat");
+    glUniformMatrix4fv(loc, 9, GL_FALSE, glm::value_ptr(jointMats[0]));
 
     glBindVertexArray(bird.vao);
     glDrawElements(GL_TRIANGLES, bird.indexCount, GL_UNSIGNED_SHORT, nullptr);

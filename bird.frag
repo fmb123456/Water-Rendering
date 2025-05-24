@@ -1,7 +1,6 @@
 #version 330 core
 in vec3 Normal;
 in vec3 FragPos;
-in float tmp;
 out vec4 FragColor;
 uniform vec3 lightPos = vec3(10.0, 10.0, 10.0);
 uniform vec3 viewPos;

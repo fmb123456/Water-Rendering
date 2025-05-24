@@ -1,27 +1,25 @@
 #version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
-layout(location = 3) in int ind;
+layout(location = 2) in ivec4 aJoints;
+layout(location = 3) in vec4 aWeights;
+
+uniform mat4 uMat[9];
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 
-uniform mat4 model0;
-uniform mat4 model1;
-uniform mat4 model2;
-uniform mat4 model3;
-uniform mat4 model4;
-uniform mat4 model5;
-uniform mat4 model6;
-uniform mat4 model7;
-uniform mat4 model8;
-
 out vec3 Normal;
 out vec3 FragPos;
-out float tmp;
 void main() {
-    FragPos = vec3(model * vec4(aPos, 1.0));
-    Normal = mat3(transpose(inverse(model))) * aNormal;
-    gl_Position = projection * view * vec4(FragPos, 1.0);
-    tmp = ind;
+    mat4 skinMat = aWeights.x * uMat[aJoints.x] +
+        aWeights.y * uMat[aJoints.y] +
+        aWeights.z * uMat[aJoints.z] +
+        aWeights.w * uMat[aJoints.w];
+        
+    vec4 skPos = skinMat * vec4(aPos,1.0);
+    FragPos = vec3(skPos);
+    mat3 normMat = mat3(transpose(inverse(skinMat)));
+    Normal = normalize(normMat * aNormal);
+    gl_Position = projection * view * skPos;
 }
