@@ -24,6 +24,7 @@ void renderFoamTexture();
 void renderExtraEffects(float time);
 void renderScene(float time);
 void renderPool();
+void renderBird();
 void processInput(GLFWwindow* window);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -42,8 +43,23 @@ unsigned int skyboxVAO, skyboxVBO;
 unsigned int cubemapTexture;
 Shader *skyboxShader;
 
-unsigned int poolVAO, poolVBO, poolEBO, poolIndexCount;
-Shader *poolShader;
+typedef std::vector<float> VecF;
+struct AnimSampler {
+    VecF times;              // keyframe times
+    std::vector<VecF> values;// outputs per keyframe
+    std::string path;        // translation/rotation/scale/weights
+    int targetIndex;         // node or primitive index
+};
+
+struct object {
+    unsigned int vao, vbo, ebo, indexCount;
+    std::vector<AnimSampler> animSamplers;
+    tinygltf::Model model;
+} pool, bird;
+
+void loadObject(object &obj, std::string filePath);
+
+Shader *poolShader, *birdShader;
 
 unsigned int heightTex, normalTex;
 
@@ -179,8 +195,6 @@ struct Wave {
 // --- Main ---
 int main() {
     initOpenGL();
-    groundShader = new Shader("ground.vert", "ground.frag");
-    waterShader = new Shader("water.vert", "water.frag");
 
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -201,6 +215,7 @@ int main() {
         renderExtraEffects(time);
         renderScene(time);
         renderPool();
+        renderBird();
         
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -234,6 +249,7 @@ void initOpenGL() {
     glBufferData(GL_ARRAY_BUFFER, sizeof(groundVertices), groundVertices, GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
+    groundShader = new Shader("ground.vert", "ground.frag");
 
     // Create water grid
     for (int z = 0; z < GRID_SIZE - 1; ++z) {
@@ -252,6 +268,7 @@ void initOpenGL() {
             waterVertices.push_back(glm::vec3(x0, 0.0f, z1));
         }
     }
+    waterShader = new Shader("water.vert", "water.frag");
 
     glGenVertexArrays(1, &waterVAO);
     glGenBuffers(1, &waterVBO);
@@ -343,38 +360,77 @@ void initOpenGL() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     // pool
-    tinygltf::Model model;
+    loadObject(pool, "model/terrain.glb");
+    poolShader = new Shader("pool.vert", "pool.frag");
+    loadObject(bird, "model/bird.glb");
+    birdShader = new Shader("bird.vert", "bird.frag");
+}
+
+void loadObject(object &obj, std::string filePath) {
     tinygltf::TinyGLTF loader;
     std::string err, warn;
-    bool ret = loader.LoadBinaryFromFile(&model, &err, &warn, "model/terrain.glb");
-    auto prim = model.meshes[0].primitives[0];
+    bool ret = loader.LoadBinaryFromFile(&obj.model, &err, &warn, filePath);
+    auto prim = obj.model.meshes[0].primitives[0];
 
-    const auto& posAccessor = model.accessors[prim.attributes.at("POSITION")];
-    const auto& posView = model.bufferViews[posAccessor.bufferView];
-    const auto& posBuffer = model.buffers[posView.buffer];
+    if (!obj.model.animations.empty()) {
+        auto anim = obj.model.animations[0];
+
+        for (size_t i = 0; i < anim.samplers.size(); ++i) {
+            const auto& sam = anim.samplers[i];
+            AnimSampler as;
+            // read times
+            auto& accIn = obj.model.accessors[sam.input];
+            auto& viewIn = obj.model.bufferViews[accIn.bufferView];
+            auto& bufIn = obj.model.buffers[viewIn.buffer];
+            const float* tptr = reinterpret_cast<const float*>(bufIn.data.data() + viewIn.byteOffset + accIn.byteOffset);
+            as.times.assign(tptr, tptr + accIn.count);
+            // read values
+            auto& accOut = obj.model.accessors[sam.output];
+            auto& viewOut = obj.model.bufferViews[accOut.bufferView];
+            auto& bufOut = obj.model.buffers[viewOut.buffer];
+            const float* vptr = reinterpret_cast<const float*>(bufOut.data.data() + viewOut.byteOffset + accOut.byteOffset);
+            size_t comp = accOut.type; // SCALAR=1, VEC3=3, VEC4=4
+            as.values.resize(accOut.count);
+            for (size_t f = 0; f < accOut.count; ++f) {
+                as.values[f].assign(vptr + f*comp, vptr + (f+1)*comp);
+            }
+            // find channel target
+            for (auto& channel : anim.channels) {
+                if (channel.sampler == i) {
+                    as.targetIndex = channel.target_node;
+                    as.path = channel.target_path;
+                }
+            }
+            obj.animSamplers.push_back(as);
+        }
+    }
+
+    const auto& posAccessor = obj.model.accessors[prim.attributes.at("POSITION")];
+    const auto& posView = obj.model.bufferViews[posAccessor.bufferView];
+    const auto& posBuffer = obj.model.buffers[posView.buffer];
     const float* positions = reinterpret_cast<const float*>(&posBuffer.data[posView.byteOffset + posAccessor.byteOffset]);
 
     // Normals (optional)
     const float* normals = nullptr;
     if (prim.attributes.count("NORMAL")) {
-        auto &nAccessor = model.accessors[prim.attributes.at("NORMAL")];
-        auto &nView = model.bufferViews[nAccessor.bufferView];
-        auto &nBuffer = model.buffers[nView.buffer];
+        auto &nAccessor = obj.model.accessors[prim.attributes.at("NORMAL")];
+        auto &nView = obj.model.bufferViews[nAccessor.bufferView];
+        auto &nBuffer = obj.model.buffers[nView.buffer];
         normals = reinterpret_cast<const float*>(&nBuffer.data[nView.byteOffset + nAccessor.byteOffset]);
     }
 
     // Indices
-    const auto& idxAccessor = model.accessors[prim.indices];
-    const auto& idxView = model.bufferViews[idxAccessor.bufferView];
-    const auto& idxBuffer = model.buffers[idxView.buffer];
+    const auto& idxAccessor = obj.model.accessors[prim.indices];
+    const auto& idxView = obj.model.bufferViews[idxAccessor.bufferView];
+    const auto& idxBuffer = obj.model.buffers[idxView.buffer];
     const unsigned short* indices = reinterpret_cast<const unsigned short*>(&idxBuffer.data[idxView.byteOffset + idxAccessor.byteOffset]);
-    poolIndexCount = idxAccessor.count;
+    obj.indexCount = idxAccessor.count;
 
     // Upload to GPU
-    glGenVertexArrays(1, &poolVAO);
-    glBindVertexArray(poolVAO);
-    glGenBuffers(1, &poolVBO);
-    glBindBuffer(GL_ARRAY_BUFFER, poolVBO);
+    glGenVertexArrays(1, &obj.vao);
+    glBindVertexArray(obj.vao);
+    glGenBuffers(1, &obj.vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, obj.vbo);
     glBufferData(GL_ARRAY_BUFFER, posAccessor.count * 3 * sizeof(float), positions, GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
     glEnableVertexAttribArray(0);
@@ -386,11 +442,20 @@ void initOpenGL() {
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
         glEnableVertexAttribArray(1);
     }
-    glGenBuffers(1, &poolEBO);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, poolEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, poolIndexCount * sizeof(unsigned short), indices, GL_STATIC_DRAW);
+    glGenBuffers(1, &obj.ebo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, obj.ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, obj.indexCount * sizeof(unsigned short), indices, GL_STATIC_DRAW);
 
-    poolShader = new Shader("pool.vert", "pool.frag");
+    std::vector <int> indices_int;
+    for (int i = 0; i < obj.indexCount; ++i) {
+        indices_int.push_back(indices[i]);
+    }
+    GLuint tmp;
+    glGenBuffers(1, &tmp);
+    glBindBuffer(GL_ARRAY_BUFFER, tmp);
+    glBufferData(GL_ARRAY_BUFFER, obj.indexCount * sizeof(int), &indices_int[0], GL_STATIC_DRAW);
+    glVertexAttribIPointer(3, 1, GL_INT, 0, nullptr);
+    glEnableVertexAttribArray(3);
 }
 
 // --- Input Processing ---
@@ -504,8 +569,124 @@ void renderPool() {
     poolShader->setVec3("viewPos", cameraPos);
     glm::mat4 modelMat = glm::mat4(1.0f);
 
-    glBindVertexArray(poolVAO);
-    glDrawElements(GL_TRIANGLES, poolIndexCount, GL_UNSIGNED_SHORT, nullptr);
+    glBindVertexArray(pool.vao);
+    glDrawElements(GL_TRIANGLES, pool.indexCount, GL_UNSIGNED_SHORT, nullptr);
+
+    glDepthFunc(GL_LESS);  // restore deep test mode
+}
+
+VecF interpolate(const AnimSampler& as, float t) {
+    // boundary
+    if (t <= as.times.front()) return as.values.front();
+    if (t >= as.times.back())  return as.values.back();
+    // find interval
+    size_t idx = 0;
+    while (idx + 1 < as.times.size() && t > as.times[idx+1]) ++idx;
+    float t0 = as.times[idx], t1 = as.times[idx+1];
+    float f = (t - t0)/(t1 - t0);
+    const auto& v0 = as.values[idx];
+    const auto& v1 = as.values[idx+1];
+    VecF out(v0.size());
+    for (size_t j = 0; j < v0.size(); ++j) out[j] = v0[j]*(1-f) + v1[j]*f;
+    return out;
+}
+
+glm::mat4 quatToMat4(float x, float y, float z, float w) {
+    float x2 = x + x,  y2 = y + y,  z2 = z + z;
+    float xx = x * x2,  xy = x * y2,  xz = x * z2;
+    float yy = y * y2,  yz = y * z2,  zz = z * z2;
+    float wx = w * x2,  wy = w * y2,  wz = w * z2;
+
+    glm::mat4 m;
+    m[0][0] = 1.0f - (yy + zz);
+    m[0][1] =        xy + wz;
+    m[0][2] =        xz - wy;
+    m[0][3] = 0.0f;
+
+    m[1][0] =        xy - wz;
+    m[1][1] = 1.0f - (xx + zz);
+    m[1][2] =        yz + wx;
+    m[1][3] = 0.0f;
+
+    m[2][0] =        xz + wy;
+    m[2][1] =        yz - wx;
+    m[2][2] = 1.0f - (xx + yy);
+    m[2][3] = 0.0f;
+
+    m[3][0] = 0.0f;
+    m[3][1] = 0.0f;
+    m[3][2] = 0.0f;
+    m[3][3] = 1.0f;
+    return m;
+}
+
+glm::mat4 get_mat(float xR, float yR, float zR, float wR, float xT, float yT, float zT, float wT) {
+    float t0 = 2.0 * (-wT * xR + xT * wR - yT * zR + zT * yR);
+    float t1 = 2.0 * (-wT * yR + xT * zR + yT * wR - zT * xR);
+    float t2 = 2.0 * (-wT * zR - xT * yR + yT * xR + zT * wR);
+
+    glm::mat4 m;
+    m[0][0] = 1.0 - (2.0 * yR * yR) - (2.0 * zR * zR);
+    m[0][1] = (2.0 * xR * yR) + (2.0 * wR * zR);
+    m[0][2] = (2.0 * xR * zR) - (2.0 * wR * yR);
+    m[0][3] = 0;
+    m[1][0] = (2.0 * xR * yR) - (2.0 * wR * zR);
+    m[1][1] = 1.0 - (2.0 * xR * xR) - (2.0 * zR * zR);
+    m[1][2] = (2.0 * yR * zR) + (2.0 * wR * xR);
+    m[1][3] = 0;
+    m[2][0] = (2.0 * xR * zR) + (2.0 * wR * yR);
+    m[2][1] = (2.0 * yR * zR) - (2.0 * wR * xR);
+    m[2][2] = 1.0 - (2.0 * xR * xR) - (2.0 * yR * yR);
+    m[2][3] = 0;
+    m[3][0] = t0;
+    m[3][1] = t1;
+    m[3][2] = t2;
+    m[3][3] = 1;
+
+    return m;
+}
+
+void renderBird() {
+    glDepthFunc(GL_LEQUAL);  // change it to LEQUAL and make sure skybox passes the depth test
+    birdShader->use();
+    auto animSamplers = bird.animSamplers;
+
+    float t = fmod(glfwGetTime(), animSamplers.front().times.back());
+
+    for (auto& as : animSamplers) {
+        VecF val = interpolate(as,t);
+
+        auto& node = bird.model.nodes[as.targetIndex];
+        if (as.path == "translation") {
+            node.translation = { val[0], val[1], val[2] };
+        } else if (as.path == "rotation") {
+            node.rotation = { val[0], val[1], val[2], val[3] };
+        } else if (as.path == "scale") {
+            node.scale = { val[0], val[1], val[2] };
+        }
+    }
+    
+    const auto& root = bird.model.nodes[0];
+    glm::mat4 model = glm::mat4(1.0f);
+    // apply translation
+    model = glm::translate(model, glm::vec3(root.translation[0], root.translation[1], root.translation[2]));
+    model *= glm::mat4_cast(glm::quat(root.rotation[3], root.rotation[0], root.rotation[1], root.rotation[2]));
+    model = glm::scale(model, glm::vec3(root.scale[0], root.scale[1], root.scale[2]));
+
+    glm::mat4 global = glm::mat4(1.0f);
+    global = glm::scale(global, glm::vec3(0.12f));
+    global = glm::translate(global, glm::vec3(0.0f, 10.0f, 0.0f));
+    model = global * model;
+
+    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+    glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+    birdShader->setMat4("model", model);
+    birdShader->setMat4("projection", projection);
+    birdShader->setMat4("view", view);
+    birdShader->setVec3("viewPos", cameraPos);
+
+    glBindVertexArray(bird.vao);
+    glDrawElements(GL_TRIANGLES, bird.indexCount, GL_UNSIGNED_SHORT, nullptr);
 
     glDepthFunc(GL_LESS);  // restore deep test mode
 }
