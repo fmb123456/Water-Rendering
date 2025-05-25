@@ -615,7 +615,7 @@ void renderBird() {
     birdShader->use();
     auto animSamplers = bird.animSamplers;
 
-    float t = fmod(glfwGetTime(), animSamplers.front().times.back());
+    float t = fmod(glfwGetTime(), animSamplers.front().times.back() - 0.1) + 0.05;
 
     for (auto& as : animSamplers) {
         VecF val = interpolate(as,t);
@@ -674,6 +674,20 @@ void renderBird() {
     glm::mat4 model = glm::mat4(1.0f);
     model = glm::scale(model, glm::vec3(0.12f));
     model = glm::translate(model, glm::vec3(0.0f, 10.0f, 0.0f));
+
+    float step = fmod(glfwGetTime(), 30.0);
+    if (step <= 10) {
+        model = glm::translate(model, glm::vec3(0.0f, 0.0f, step * 3 - 15.0f));
+    } else if (step <= 15) {
+        model = glm::translate(model, glm::vec3(0.0f, 0.0f, 15.0f));
+        model = glm::rotate(model, glm::radians((step - 10.0f) * 180.0f / 5), glm::vec3(0.0f, 1.0f, 0.0f));
+    } else if (step <= 25) {
+        model = glm::translate(model, glm::vec3(0.0f, 0.0f, 60.f - step * 3));
+        model = glm::rotate(model, glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    } else {
+        model = glm::translate(model, glm::vec3(0.0f, 0.0f, -15.0f));
+        model = glm::rotate(model, glm::radians((30.0f - step) * 180.0f / 5), glm::vec3(0.0f, 1.0f, 0.0f));
+    }
 
     std::vector<glm::mat4> jointMats(skin.joints.size());
     for (size_t i = 0; i < skin.joints.size(); ++i) {
