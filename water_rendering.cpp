@@ -28,6 +28,7 @@ void renderBird();
 void processInput(GLFWwindow* window);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
+unsigned int loadTexture(std::string filePath);
 
 unsigned int loadCubemap(std::vector<std::string> faces);
 void renderSkybox();
@@ -60,6 +61,7 @@ struct object {
 void loadObject(object &obj, std::string filePath);
 
 Shader *poolShader, *birdShader;
+unsigned int stoneTextureID, woodTextureID;
 
 unsigned int heightTex, normalTex;
 
@@ -362,8 +364,57 @@ void initOpenGL() {
     // pool
     loadObject(pool, "model/terrain.glb");
     poolShader = new Shader("pool.vert", "pool.frag");
+
+    // bird
     loadObject(bird, "model/bird.glb");
     birdShader = new Shader("bird.vert", "bird.frag");
+
+    // texture
+    stoneTextureID = loadTexture("texture/stone.png");
+    woodTextureID = loadTexture("texture/wood.jpg");
+}
+
+unsigned int loadTexture(std::string filePath) {
+    int width, height, nrChannels;
+    stbi_uc* data = stbi_load(filePath.c_str(),
+                              &width, &height, &nrChannels,
+                              0);
+    if (!data) {
+        std::cerr << "Failed to load texture: " << filePath << "\n";
+        exit(0);
+    }
+
+    unsigned int textureID;
+
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    GLenum format = GL_RGB;
+    if (nrChannels == 1)      format = GL_RED;
+    else if (nrChannels == 3) format = GL_RGB;
+    else if (nrChannels == 4) format = GL_RGBA;
+
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,               // mipmap level
+                 format,          // internal format
+                 width, height,
+                 0,               // border
+                 format,          // source format
+                 GL_UNSIGNED_BYTE,
+                 data);
+
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    stbi_image_free(data);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    return textureID;
 }
 
 void loadObject(object &obj, std::string filePath) {
@@ -414,6 +465,7 @@ void loadObject(object &obj, std::string filePath) {
     const float* normals = nullptr;
     const unsigned char* joints = nullptr;
     const float* weights = nullptr;
+    const float* texcoord = nullptr;
     if (prim.attributes.count("NORMAL")) {
         auto &nAccessor = obj.model.accessors[prim.attributes.at("NORMAL")];
         auto &nView = obj.model.bufferViews[nAccessor.bufferView];
@@ -431,6 +483,12 @@ void loadObject(object &obj, std::string filePath) {
         auto &nView = obj.model.bufferViews[nAccessor.bufferView];
         auto &nBuffer = obj.model.buffers[nView.buffer];
         weights = reinterpret_cast<const float*>(&nBuffer.data[nView.byteOffset + nAccessor.byteOffset]);
+    }
+    if (prim.attributes.count("TEXCOORD_0")) {
+        auto &nAccessor = obj.model.accessors[prim.attributes.at("TEXCOORD_0")];
+        auto &nView = obj.model.bufferViews[nAccessor.bufferView];
+        auto &nBuffer = obj.model.buffers[nView.buffer];
+        texcoord = reinterpret_cast<const float*>(&nBuffer.data[nView.byteOffset + nAccessor.byteOffset]);
     }
 
     // Indices
@@ -471,6 +529,14 @@ void loadObject(object &obj, std::string filePath) {
         glBufferData(GL_ARRAY_BUFFER, posAccessor.count * 4 * sizeof(float), weights, GL_STATIC_DRAW);
         glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
         glEnableVertexAttribArray(3);
+    }
+    if (texcoord) {
+        GLuint nbo;
+        glGenBuffers(1, &nbo);
+        glBindBuffer(GL_ARRAY_BUFFER, nbo);
+        glBufferData(GL_ARRAY_BUFFER, posAccessor.count * 2 * sizeof(float), texcoord, GL_STATIC_DRAW);
+        glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glEnableVertexAttribArray(4);
     }
     glGenBuffers(1, &obj.ebo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, obj.ebo);
@@ -577,6 +643,12 @@ unsigned int loadCubemap(std::vector<std::string> faces) {
 void renderPool() {
     glDepthFunc(GL_LEQUAL);  // change it to LEQUAL and make sure skybox passes the depth test
     poolShader->use();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, stoneTextureID);
+    {
+        GLint loc = glGetUniformLocation(birdShader->ID, "uTexture");
+        glUniform1i(loc, 0);
+    }
 
     glm::mat4 model = glm::mat4(1.0f);
     model = glm::scale(model, glm::vec3(0.12));
@@ -613,6 +685,13 @@ VecF interpolate(const AnimSampler& as, float t) {
 void renderBird() {
     glDepthFunc(GL_LEQUAL);  // change it to LEQUAL and make sure skybox passes the depth test
     birdShader->use();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, woodTextureID);
+    {
+        GLint loc = glGetUniformLocation(birdShader->ID, "uTexture");
+        glUniform1i(loc, 0);
+    }
+
     auto animSamplers = bird.animSamplers;
 
     float t = fmod(glfwGetTime(), animSamplers.front().times.back() - 0.1) + 0.05;
@@ -702,8 +781,10 @@ void renderBird() {
     birdShader->setMat4("projection", projection);
     birdShader->setMat4("view", view);
     birdShader->setVec3("viewPos", cameraPos);
-    GLint loc = glGetUniformLocation(birdShader->ID, "uMat");
-    glUniformMatrix4fv(loc, 9, GL_FALSE, glm::value_ptr(jointMats[0]));
+    {
+        GLint loc = glGetUniformLocation(birdShader->ID, "uMat");
+        glUniformMatrix4fv(loc, 9, GL_FALSE, glm::value_ptr(jointMats[0]));
+    }
 
     glBindVertexArray(bird.vao);
     glDrawElements(GL_TRIANGLES, bird.indexCount, GL_UNSIGNED_SHORT, nullptr);

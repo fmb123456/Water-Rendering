@@ -1,12 +1,14 @@
 #version 330 core
 in vec3 Normal;
 in vec3 FragPos;
+in vec2 TexCoord;
 out vec4 FragColor;
-uniform vec3 lightPos = vec3(10.0, 10.0, 10.0);
+uniform sampler2D uTexture;
+uniform vec3 lightPos = vec3(2.0, 2.0, 2.0);
 uniform vec3 viewPos;
-uniform vec3 lightColor = vec3(1.0);
-uniform vec3 objectColor = vec3(0.8, 0.5, 0.3);
+uniform vec3 lightColor = vec3(1.0, 1.0, 1.0);
 void main() {
+    vec4 texColor = texture2D(uTexture, TexCoord);
     // Ambient
     float ambientStrength = 0.1;
     vec3 ambient = ambientStrength * lightColor;
@@ -21,6 +23,6 @@ void main() {
     vec3 reflectDir = reflect(-lightDir, norm);
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
     vec3 specular = specularStrength * spec * lightColor;
-    vec3 result = (ambient + diffuse + specular) * objectColor;
+    vec3 result = (ambient + diffuse + specular) * texColor.rgb;
     FragColor = vec4(result, 1.0);
 }
