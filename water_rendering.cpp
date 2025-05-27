@@ -38,6 +38,8 @@ unsigned int groundVAO = 0, waterVAO = 0;
 unsigned int groundVBO = 0, waterVBO = 0;
 GLFWwindow* window;
 std::vector<glm::vec3> waterVertices;
+std::vector<glm::vec3> rainDrops;
+const int rainBound = 32, rainDropFreq = 10;
 Shader *waterShader, *groundShader;
 
 unsigned int skyboxVAO, skyboxVBO;
@@ -203,6 +205,9 @@ int main() {
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     float time = 0.0f;
+    std::default_random_engine eng;
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    int dropCnt = (int)(dist(eng) * rainDropFreq);
     while (!glfwWindowShouldClose(window)) {
         time = (float)glfwGetTime();
         processInput(window);
@@ -213,6 +218,15 @@ int main() {
         renderSkybox();
         renderGround();
         renderWaterSurface(time);
+        if (dropCnt == 0) {
+            dropCnt = (int)(dist(eng) * rainDropFreq);
+            rainDrops.push_back(glm::vec3(dist(eng), dist(eng), time));
+            if (rainDrops.size() > rainBound) {
+                rainDrops.erase(rainDrops.begin());
+            }
+        } else {
+            dropCnt--;
+        }
         renderFoamTexture();
         renderExtraEffects(time);
         renderScene(time);
@@ -838,6 +852,14 @@ void renderWaterSurface(float time) {
     waterShader->setVec3("lightPos", glm::vec3(2.0f, 2.0f, 2.0f));
     waterShader->setVec3("viewPos", cameraPos);
     waterShader->setVec3("lightColor", glm::vec3(1.0f, 1.0f, 1.0f));
+    {
+        GLint loc = glGetUniformLocation(waterShader->ID, "rainDrops");
+        glUniform3fv(loc, (int)rainDrops.size(), glm::value_ptr(rainDrops[0]));
+    }
+    {
+        GLint loc = glGetUniformLocation(waterShader->ID, "rainCount");
+        glUniform1i(loc, (int)rainDrops.size());
+    }
     glBindVertexArray(waterVAO);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDrawArrays(GL_TRIANGLES, 0, waterVertices.size());
