@@ -18,6 +18,11 @@ uniform samplerCube skybox;
 uniform sampler2D reflectionTex;
 uniform sampler2D refractionTex;
 
+uniform sampler2D refractionDepthTex;
+uniform float nearPlane;
+uniform float farPlane;
+uniform vec2 screenSize;
+
 void main() {
     vec3 lightDir = normalize(lightPos - worldPos);
     vec3 viewDir = normalize(viewPos - worldPos);
@@ -34,5 +39,18 @@ void main() {
     vec4 reflection = texture(reflectionTex, clamp(reflectionCoord, vec2(0.001), vec2(0.999))).rgba;
     vec4 refraction = texture(refractionTex, clamp(refractionCoord, vec2(0.001), vec2(0.999))).rgba;
     reflection = vec4(mix(skyColor + specular, reflection.rgb, reflection.a), 1.);
-    FragColor = vec4(mix(refraction.rgb, reflection.rgb, fresnel), 1.);
+    //FragColor = vec4(mix(refraction.rgb, reflection.rgb, fresnel), 1.);
+    //return;
+
+    vec2 screenUV = gl_FragCoord.xy / screenSize;
+    float sceneDepth = texture(refractionDepthTex, screenUV).r;
+    float z = sceneDepth * 2.0 - 1.0;
+    float viewDepth = (2.0 * nearPlane * farPlane) / (farPlane + nearPlane - z * (farPlane - nearPlane));
+    float waterDepth = viewDepth - length(viewPos - worldPos);
+
+    float depthFactor = clamp(waterDepth / 2.0, 0.0, 1.0);
+    vec3 refractionColor = refraction.rgb * (1.0 - depthFactor) + vec3(0.0, 0.2, 0.3) * depthFactor;
+
+    vec3 finalColor = mix(refractionColor, reflection.rgb, fresnel);
+    FragColor = vec4(finalColor, 1.0);
 }

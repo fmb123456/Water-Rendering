@@ -49,6 +49,7 @@ Shader *skyboxShader;
 const float waterHeight = 0.14f;
 unsigned int reflectionFBO, refractionFBO;
 unsigned int reflectionTex, refractionTex;
+unsigned int refractionDepthTex;
 
 typedef std::vector<float> VecF;
 struct AnimSampler {
@@ -680,13 +681,24 @@ void initReflectionRefraction() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, refractionTex, 0);
 
-    unsigned int rbo2;
+    // Refraction Depth Texture
+    glGenTextures(1, &refractionDepthTex);
+    glBindTexture(GL_TEXTURE_2D, refractionDepthTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, 800, 600, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, refractionDepthTex, 0);
+
+    /*unsigned int rbo2;
     glGenRenderbuffers(1, &rbo2);
     glBindRenderbuffer(GL_RENDERBUFFER, rbo2);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 800, 600);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo2);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo2);*/
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    
 }
 
 // --- Input Processing ---
@@ -1024,6 +1036,15 @@ void renderWaterSurface(float time) {
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, refractionTex);
     waterShader->setInt("refractionTex", 5);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, refractionDepthTex);
+    waterShader->setInt("refractionDepthTex", 6);
+    waterShader->setFloat("nearPlane", 0.1f);
+    waterShader->setFloat("farPlane", 100.0f);
+
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    waterShader->setVec2("screenSize", glm::vec2((float)width, (float)height));
 
     glm::mat4 model = glm::mat4(1.0f);
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
