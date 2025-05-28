@@ -49,21 +49,20 @@ void main() {
     vec2 uv = (pos.xz + 1.0) / 2.0;
     float h = baseHeight(uv);
 
-    h +=sumRipple(uv, time);
-
+    h += sumRipple(uv, time);
     pos.y = h;
 
-    float eps = 0.001;
-    float hL = baseHeight(uv + vec2(-eps,0)) +
-               sumRipple(uv+vec2(-eps,0), time);
-    float hR = baseHeight(uv + vec2(+eps,0)) +
-               sumRipple(uv+vec2(+eps,0), time);
-    float hD = baseHeight(uv + vec2(0,-eps)) +
-               sumRipple(uv+vec2(0,-eps), time);
-    float hU = baseHeight(uv + vec2(0,+eps)) +
-               sumRipple(uv+vec2(0,+eps), time);
-    vec3 dx = vec3(2.0*eps, hR - hL, 0.0);
-    vec3 dz = vec3(0.0, hU - hD, 2.0*eps);
+    float eps = 0.00001;
+    float hL = baseHeight(uv + vec2(-eps, 0)) +
+               sumRipple(uv + vec2(-eps, 0), time);
+    float hR = baseHeight(uv + vec2(+eps, 0)) +
+               sumRipple(uv + vec2(+eps, 0), time);
+    float hD = baseHeight(uv + vec2(0, -eps)) +
+               sumRipple(uv + vec2(0, -eps), time);
+    float hU = baseHeight(uv + vec2(0, +eps)) +
+               sumRipple(uv + vec2(0, +eps), time);
+    vec3 dx = vec3(2.0 * eps, hR - hL, 0.0);
+    vec3 dz = vec3(0.0, hU - hD, 2.0 * eps);
     normal = normalize(cross(dz, dx));
 
     worldPos = vec3(model * vec4(pos, 1.0));
