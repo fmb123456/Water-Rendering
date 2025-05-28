@@ -17,11 +17,17 @@ uniform samplerCube skybox;
 
 uniform sampler2D reflectionTex;
 uniform sampler2D refractionTex;
-
 uniform sampler2D refractionDepthTex;
+uniform sampler2D foamTexture;
+
 uniform float nearPlane;
 uniform float farPlane;
 uniform vec2 screenSize;
+uniform float time;
+uniform float waterHeight;
+
+uniform mat4 inverseProjection;
+uniform mat4 inverseView;
 
 void main() {
     vec3 lightDir = normalize(lightPos - worldPos);
@@ -33,7 +39,6 @@ void main() {
 
     vec3 R = reflect(-viewDir, normal);
     vec3 skyColor = texture(skybox, R).rgb;
-    float foam = texture(foamMap, uv).r;
 
     float fresnel = clamp(1.0 - dot(viewDir, normal), 0.0, 1.0);
     vec4 reflection = texture(reflectionTex, clamp(reflectionCoord, vec2(0.001), vec2(0.999))).rgba;
@@ -42,15 +47,39 @@ void main() {
     //FragColor = vec4(mix(refraction.rgb, reflection.rgb, fresnel), 1.);
     //return;
 
+    // calculate water depth
     vec2 screenUV = gl_FragCoord.xy / screenSize;
     float sceneDepth = texture(refractionDepthTex, screenUV).r;
     float z = sceneDepth * 2.0 - 1.0;
     float viewDepth = (2.0 * nearPlane * farPlane) / (farPlane + nearPlane - z * (farPlane - nearPlane));
     float waterDepth = viewDepth - length(viewPos - worldPos);
-
     float depthFactor = clamp(waterDepth / 2.0, 0.0, 1.0);
-    vec3 refractionColor = refraction.rgb * (1.0 - depthFactor) + vec3(0.0, 0.2, 0.3) * depthFactor;
+
+    //restore tarrain height
+    vec2 ndc = screenUV * 2.0 - 1.0;
+    vec4 clipPos = vec4(ndc, z, 1.0);
+    vec4 viewPos4 = inverseProjection * clipPos;
+    viewPos4 /= viewPos4.w;
+    vec4 worldPos4 = inverseView * viewPos4;
+    float terrainHeight = worldPos4.y;
+
+    float verticalDepth = waterHeight - terrainHeight;
+    float foamEdge = smoothstep(0.1, 0.0, verticalDepth);
+    foamEdge = pow(foamEdge, 0.5);
+    float staticFoam = texture(foamMap, uv).r;
+    float foamNoise = texture(foamTexture, uv * 4.0 + vec2(time * 0.05)).r;
+    //float foamWave = sin(10.0 * uv.x + time * 2.0) * 0.5 + 0.5;
+    float dynamicFoam = foamEdge * foamNoise;
+
+    staticFoam = 0.;
+    float totalFoam = clamp(staticFoam + dynamicFoam, 0.0, 1.0);
+    totalFoam = pow(totalFoam, 0.4);
+
+    vec3 depthTint = vec3(0.3, 0.8, 0.9);
+    vec3 refractionColor = refraction.rgb * (1.0 - depthFactor) + depthTint * depthFactor;
 
     vec3 finalColor = mix(refractionColor, reflection.rgb, fresnel);
+    finalColor = mix(finalColor, vec3(1.0), totalFoam);
     FragColor = vec4(finalColor, 1.0);
 }
+

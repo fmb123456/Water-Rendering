@@ -68,7 +68,7 @@ struct object {
 void loadObject(object &obj, std::string filePath);
 
 Shader *poolShader, *birdShader;
-unsigned int stoneTextureID, woodTextureID;
+unsigned int stoneTextureID, woodTextureID, foamTextureID;
 
 unsigned int heightTex, normalTex, foamTex;
 
@@ -483,6 +483,7 @@ void initOpenGL() {
     // texture
     stoneTextureID = loadTexture("texture/stone.png");
     woodTextureID = loadTexture("texture/wood.jpg");
+    foamTextureID = loadTexture("texture/foam_gray.jpeg");
 
     initReflectionRefraction();
 }
@@ -1041,6 +1042,9 @@ void renderWaterSurface(float time) {
     waterShader->setInt("refractionDepthTex", 6);
     waterShader->setFloat("nearPlane", 0.1f);
     waterShader->setFloat("farPlane", 100.0f);
+    glActiveTexture(GL_TEXTURE7);
+    glBindTexture(GL_TEXTURE_2D, foamTextureID);
+    waterShader->setInt("foamTexture", 7);
 
     int width, height;
     glfwGetFramebufferSize(window, &width, &height);
@@ -1051,7 +1055,9 @@ void renderWaterSurface(float time) {
     glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
     waterShader->setMat4("model", model);
     waterShader->setMat4("view", view);
+    waterShader->setMat4("inverseView", glm::inverse(view));
     waterShader->setMat4("projection", projection);
+    waterShader->setMat4("inverseProjection", glm::inverse(projection));
     waterShader->setFloat("time", time);
     waterShader->setVec3("lightPos", glm::vec3(2.0f, 2.0f, 2.0f));
     waterShader->setVec3("viewPos", cameraPos);
