@@ -9,6 +9,7 @@ uniform mat4 uMat[9];
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+uniform vec4 clipPlane;
 
 out vec3 Normal;
 out vec3 FragPos;
@@ -25,4 +26,5 @@ void main() {
     Normal = normalize(normMat * aNormal);
     gl_Position = projection * view * skPos;
     TexCoord = aTexcoord;
+    gl_ClipDistance[0] = dot(FragPos, clipPlane.xyz) + clipPlane.w;
 }

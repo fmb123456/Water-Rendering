@@ -18,13 +18,13 @@
 
 // --- Function Prototypes ---
 void initOpenGL();
+void initReflectionRefraction();
 void renderGround();
 void renderWaterSurface(float time);
-void renderFoamTexture();
-void renderExtraEffects(float time);
-void renderScene(float time);
-void renderPool();
-void renderBird();
+void renderPool(int mode = 0);
+void renderBird(int mode = 0);
+void renderReflectionTexture();
+void renderRefractionTexture();
 void processInput(GLFWwindow* window);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -46,6 +46,10 @@ unsigned int skyboxVAO, skyboxVBO;
 unsigned int cubemapTexture;
 Shader *skyboxShader;
 
+const float waterHeight = 0.14f;
+unsigned int reflectionFBO, refractionFBO;
+unsigned int reflectionTex, refractionTex;
+
 typedef std::vector<float> VecF;
 struct AnimSampler {
     VecF times;              // keyframe times
@@ -65,9 +69,10 @@ void loadObject(object &obj, std::string filePath);
 Shader *poolShader, *birdShader;
 unsigned int stoneTextureID, woodTextureID;
 
-unsigned int heightTex, normalTex;
+unsigned int heightTex, normalTex, foamTex;
 
 const int GRID_SIZE = 300;
+const float LEN = 1.f;
 
 // Camera
 glm::vec3 cameraPos = glm::vec3(0.0f, 0.5f, 2.0f);
@@ -81,19 +86,33 @@ float yaw = -90.0f, pitch = 0.0f, fov = 45.0f;
 struct Wave {
     using Complex = std::complex<float>;
 
-    const int N = 100;
-    const float L = 2.0f;
-    const float A = 0.05f;
+    const int N = 128; // Grid
+    const float L = 2 * LEN; // Simulate size
+    const float A = 0.03f; // Amplitude
     const float G = 9.81f;
     const glm::vec2 wind = glm::vec2(2.0f, 2.0f);
+    const float foamThreshold = -1.f;
+    const float lambda = .1f;
 
     std::vector<Complex> h0;
     std::vector<Complex> hkt;
     std::vector<float> heightMap;
     std::vector<glm::vec3> normalMap;
+    std::vector<float> foamMap, prevFoamMap;
+    std::vector<Complex> Dxt;
+    std::vector<Complex> Dyt;
+    std::vector<float> Dx;
+    std::vector<float> Dy;
+    fftwf_complex* in;
+    fftwf_complex* out;
+    fftwf_plan plan;
 
-    Wave(): h0(N * N), hkt(N * N), heightMap(N * N), normalMap(N * N) {
+
+    Wave(): h0(N * N), hkt(N * N), heightMap(N * N), normalMap(N * N), foamMap(N * N), prevFoamMap(N * N), Dxt(N * N), Dyt(N * N), Dx(N * N), Dy(N * N) {
         initializeH0();
+        in = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * N * N);
+        out = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * N * N);
+        plan = fftwf_plan_dft_2d(N, N, in, out, FFTW_BACKWARD, FFTW_MEASURE);
     }
 
     float gaussianRandom() {
@@ -149,25 +168,27 @@ struct Wave {
                 float omega = sqrt(G * kLen);
                 Complex e = exp(Complex(0, omega * t));
                 hkt[idx] = h0k * e + h0minusk * std::conj(e);
+
+                Complex i(0, 1);
+                Dxt[idx] = i * k.x * hkt[idx];
+                Dyt[idx] = i * k.y * hkt[idx];
             }
         }
     }
 
     void computeHeightMap() {
-        fftwf_complex* in = reinterpret_cast<fftwf_complex*>(hkt.data());
-        fftwf_complex* out = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * N * N);
-        fftwf_plan plan = fftwf_plan_dft_2d(N, N, in, out, FFTW_BACKWARD, FFTW_ESTIMATE);
+        std::memcpy(in, hkt.data(), sizeof(fftwf_complex) * N * N);
         fftwf_execute(plan);
-        float Min = 0.0;
+        //float Sum = 0.;
         for (int i = 0; i < N * N; ++i) {
             heightMap[i] = out[i][0];
             heightMap[i] = abs(heightMap[i]);
+            //Sum += heightMap[i];
         }
-        fftwf_destroy_plan(plan);
-        fftwf_free(out);
+        //std::cerr << Sum / (N * N) << '\n';
     }
 
-    void computeNormalMap(float spacing) {
+    void computeNormals(float spacing) {
         for (int z = 0; z < N; ++z) {
             for (int x = 0; x < N; ++x) {
                 int idx = z * N + x;
@@ -181,6 +202,67 @@ struct Wave {
             }
         }
     }
+
+    void computeDisplacements() {
+        std::memcpy(in, Dxt.data(), sizeof(fftwf_complex) * N * N);
+        fftwf_execute(plan);
+        for (int i = 0; i < N * N; ++i)
+            Dx[i] = out[i][0];
+        std::memcpy(in, Dyt.data(), sizeof(fftwf_complex) * N * N);
+        fftwf_execute(plan);
+        for (int i = 0; i < N * N; ++i)
+            Dy[i] = out[i][0];
+    }
+
+    void computeFoam() {
+        prevFoamMap = foamMap;
+        for (int z = 1; z < N - 1; ++z) {
+            for (int x = 1; x < N - 1; ++x) {
+                int idx = z * N + x;
+                float spacing = L / N;
+                float dDx_dx = (Dx[z * N + (x + 1)] - Dx[z * N + (x - 1)]) / (2.0f * spacing);
+                float dDy_dy = (Dy[(z + 1) * N + x] - Dy[(z - 1) * N + x]) / (2.0f * spacing);
+                float dDx_dy = (Dx[(z + 1) * N + x] - Dx[(z - 1) * N + x]) / (2.0f * spacing);
+                float dDy_dx = (Dy[z * N + (x + 1)] - Dy[z * N + (x - 1)]) / (2.0f * spacing);
+                float Jxx = 1.0f + lambda * dDx_dx;
+                float Jyy = 1.0f + lambda * dDy_dy;
+                float Jxy = lambda * dDx_dy;
+                float Jyx = lambda * dDy_dx;
+                float J = Jxx * Jyy - Jxy * Jyx;
+                foamMap[idx] = (J < foamThreshold) ? 1.0f : 0.0f;
+            }
+        }
+    }
+
+    void blurFoamMap(int iterations = 1) {
+        std::vector<float> temp(N * N, 0.0f);
+        for (int it = 0; it < iterations; ++it) {
+            for (int z = 1; z < N - 1; ++z) {
+                for (int x = 1; x < N - 1; ++x) {
+                    float sum = 0.0f;
+                    for (int dz = -1; dz <= 1; ++dz) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            sum += foamMap[(z + dz) * N + (x + dx)];
+                        }
+                    }
+                    temp[z * N + x] = sum / 9.0f;
+                }
+            }
+            std::swap(foamMap, temp);
+        }
+        for (int i = 0; i < N * N; ++i)
+            foamMap[i] = foamMap[i] * 0.3 + prevFoamMap[i] * 0.7;
+    }
+
+    void update(float t) {
+        updateFrequencyDomain(t);
+        computeHeightMap();
+        computeNormals(L / N);
+        computeDisplacements();
+        computeFoam();
+        blurFoamMap();
+    }
+
     void uploadHeightToGPU(GLuint texID) {
         glBindTexture(GL_TEXTURE_2D, texID);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, N, N, GL_RED, GL_FLOAT, heightMap.data());
@@ -193,6 +275,11 @@ struct Wave {
 
         glBindTexture(GL_TEXTURE_2D, texID);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, N, N, GL_RGB, GL_FLOAT, rgbData.data());
+    }
+
+    void uploadFoamToGPU(GLuint texID) {
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, N, N, GL_RED, GL_FLOAT, foamMap.data());
     }
 } wave;
 
@@ -212,24 +299,28 @@ int main() {
         time = (float)glfwGetTime();
         processInput(window);
 
+        glEnable(GL_CLIP_DISTANCE0);
+        renderReflectionTexture();
+        renderRefractionTexture();
+        glDisable(GL_CLIP_DISTANCE0);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.1f, 0.3f, 0.5f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         renderSkybox();
-        renderGround();
+        //renderGround();
         renderWaterSurface(time);
         if (dropCnt == 0) {
             dropCnt = (int)(dist(eng) * rainDropFreq);
             rainDrops.push_back(glm::vec3(dist(eng), dist(eng), time));
+            std::cerr << rainDrops.back()[0] << ' ' << rainDrops.back()[1] << ' ' << rainDrops.back()[2] << '\n';
             if (rainDrops.size() > rainBound) {
                 rainDrops.erase(rainDrops.begin());
             }
         } else {
             dropCnt--;
         }
-        renderFoamTexture();
-        renderExtraEffects(time);
-        renderScene(time);
         renderPool();
         renderBird();
         
@@ -270,10 +361,10 @@ void initOpenGL() {
     // Create water grid
     for (int z = 0; z < GRID_SIZE - 1; ++z) {
         for (int x = 0; x < GRID_SIZE - 1; ++x) {
-            float x0 = -1.0f + 2.0f * x / GRID_SIZE;
-            float z0 = -1.0f + 2.0f * z / GRID_SIZE;
-            float x1 = -1.0f + 2.0f * (x + 1) / GRID_SIZE;
-            float z1 = -1.0f + 2.0f * (z + 1) / GRID_SIZE;
+            float x0 = -LEN + 2.0f * LEN * x / GRID_SIZE;
+            float z0 = -LEN + 2.0f * LEN * z / GRID_SIZE;
+            float x1 = -LEN + 2.0f * LEN * (x + 1) / GRID_SIZE;
+            float z1 = -LEN + 2.0f * LEN * (z + 1) / GRID_SIZE;
 
             waterVertices.push_back(glm::vec3(x0, 0.0f, z0));
             waterVertices.push_back(glm::vec3(x1, 0.0f, z0));
@@ -374,6 +465,11 @@ void initOpenGL() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, wave.N, wave.N, 0, GL_RGB, GL_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glGenTextures(1, &foamTex);
+    glBindTexture(GL_TEXTURE_2D, foamTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, wave.N, wave.N, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     // pool
     loadObject(pool, "model/terrain.glb");
@@ -386,6 +482,8 @@ void initOpenGL() {
     // texture
     stoneTextureID = loadTexture("texture/stone.png");
     woodTextureID = loadTexture("texture/wood.jpg");
+
+    initReflectionRefraction();
 }
 
 unsigned int loadTexture(std::string filePath) {
@@ -557,6 +655,40 @@ void loadObject(object &obj, std::string filePath) {
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, obj.indexCount * sizeof(unsigned short), indices, GL_STATIC_DRAW);
 }
 
+void initReflectionRefraction() {
+    glGenFramebuffers(1, &reflectionFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, reflectionFBO);
+    glGenTextures(1, &reflectionTex);
+    glBindTexture(GL_TEXTURE_2D, reflectionTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 800, 600, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, reflectionTex, 0);
+
+    unsigned int rbo1;
+    glGenRenderbuffers(1, &rbo1);
+    glBindRenderbuffer(GL_RENDERBUFFER, rbo1);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 800, 600);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo1);
+
+    glGenFramebuffers(1, &refractionFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, refractionFBO);
+    glGenTextures(1, &refractionTex);
+    glBindTexture(GL_TEXTURE_2D, refractionTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 800, 600, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, refractionTex, 0);
+
+    unsigned int rbo2;
+    glGenRenderbuffers(1, &rbo2);
+    glBindRenderbuffer(GL_RENDERBUFFER, rbo2);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 800, 600);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo2);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 // --- Input Processing ---
 void processInput(GLFWwindow* window) {
     const float cameraSpeed = 2.5f * 0.016f;
@@ -654,7 +786,7 @@ unsigned int loadCubemap(std::vector<std::string> faces) {
     return textureID;
 }
 
-void renderPool() {
+void renderPool(int mode) {
     glDepthFunc(GL_LEQUAL);  // change it to LEQUAL and make sure skybox passes the depth test
     poolShader->use();
     glActiveTexture(GL_TEXTURE0);
@@ -666,13 +798,43 @@ void renderPool() {
 
     glm::mat4 model = glm::mat4(1.0f);
     model = glm::scale(model, glm::vec3(0.12));
-    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-    glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
-    poolShader->setMat4("model", model);
-    poolShader->setMat4("projection", projection);
-    poolShader->setMat4("view", view);
-    poolShader->setVec3("viewPos", cameraPos);
-    glm::mat4 modelMat = glm::mat4(1.0f);
+
+    if (mode == 0) { // render scene
+        glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+        poolShader->setMat4("model", model);
+        poolShader->setMat4("projection", projection);
+        poolShader->setMat4("view", view);
+        poolShader->setVec3("viewPos", cameraPos);
+    }
+    else if (mode == 1) { // render reflection texture
+        glm::vec3 reflectedPos = cameraPos;
+        reflectedPos.y = 2 * waterHeight - cameraPos.y;
+        glm::vec3 reflectedFront = cameraFront;
+        reflectedFront.y = -cameraFront.y;
+        glm::mat4 view = glm::lookAt(reflectedPos, reflectedPos + reflectedFront, cameraUp);
+        glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+        poolShader->setMat4("model", model);
+        poolShader->setMat4("projection", projection);
+        poolShader->setMat4("view", view);
+        poolShader->setVec3("viewPos", reflectedPos);
+        poolShader->setVec4("clipPlane", glm::vec4(0, 1, 0, -waterHeight));
+    }
+    else if (mode == 2) { // render refraction texture
+        glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+        glm::mat4 refractionModel =
+            glm::translate(glm::mat4(1.0f), {0, waterHeight, 0}) *
+            glm::scale(glm::mat4(1.0f), {1, 1.0f / 1.33f, 1}) *
+            glm::translate(glm::mat4(1.0f), {0, -waterHeight, 0}) *
+            model;
+
+        poolShader->setMat4("model", refractionModel);
+        poolShader->setMat4("projection", projection);
+        poolShader->setMat4("view", view);
+        poolShader->setVec3("viewPos", cameraPos);
+        poolShader->setVec4("clipPlane", glm::vec4(0, -1, 0, waterHeight));
+    }
 
     glBindVertexArray(pool.vao);
     glDrawElements(GL_TRIANGLES, pool.indexCount, GL_UNSIGNED_SHORT, nullptr);
@@ -696,7 +858,7 @@ VecF interpolate(const AnimSampler& as, float t) {
     return out;
 }
 
-void renderBird() {
+void renderBird(int mode) {
     glDepthFunc(GL_LEQUAL);  // change it to LEQUAL and make sure skybox passes the depth test
     birdShader->use();
     glActiveTexture(GL_TEXTURE0);
@@ -789,12 +951,27 @@ void renderBird() {
         jointMats[i] = model * world * invBindMats[i];
     }
 
-    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-    glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
-    birdShader->setMat4("model", model);
-    birdShader->setMat4("projection", projection);
-    birdShader->setMat4("view", view);
-    birdShader->setVec3("viewPos", cameraPos);
+    if (mode == 0) { // render scene
+        glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+        birdShader->setMat4("model", model);
+        birdShader->setMat4("projection", projection);
+        birdShader->setMat4("view", view);
+        birdShader->setVec3("viewPos", cameraPos);
+    }
+    else if (mode == 1) { // render reflection texture
+        glm::vec3 reflectedPos = cameraPos;
+        reflectedPos.y = 2 * waterHeight - cameraPos.y;
+        glm::vec3 reflectedFront = cameraFront;
+        reflectedFront.y = -cameraFront.y;
+        glm::mat4 view = glm::lookAt(reflectedPos, reflectedPos + reflectedFront, cameraUp);
+        glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+        birdShader->setMat4("model", model);
+        birdShader->setMat4("projection", projection);
+        birdShader->setMat4("view", view);
+        birdShader->setVec3("viewPos", reflectedPos);
+        birdShader->setVec4("clipPlane", glm::vec4(0, 1, 0, -waterHeight));
+    }
     {
         GLint loc = glGetUniformLocation(birdShader->ID, "uMat");
         glUniformMatrix4fv(loc, 9, GL_FALSE, glm::value_ptr(jointMats[0]));
@@ -825,9 +1002,7 @@ void renderWaterSurface(float time) {
     glBindBuffer(GL_ARRAY_BUFFER, waterVBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, waterVertices.size() * sizeof(glm::vec3), &waterVertices[0]);
 
-    wave.updateFrequencyDomain(time / 10.0);
-    wave.computeHeightMap();
-    wave.computeNormalMap(wave.L / wave.N);
+    wave.update(time / 10.0);
 
     waterShader->use();
 
@@ -836,11 +1011,19 @@ void renderWaterSurface(float time) {
 
     glActiveTexture(GL_TEXTURE1);
     wave.uploadHeightToGPU(heightTex);
-    glUniform1i(glGetUniformLocation(waterShader->ID, "heightMap"), 1);
-
+    waterShader->setInt("heightMap", 1);
     glActiveTexture(GL_TEXTURE2);
     wave.uploadNormalsToGPU(normalTex);
-    glUniform1i(glGetUniformLocation(waterShader->ID, "normalMap"), 2);
+    waterShader->setInt("normalMap", 2);
+    glActiveTexture(GL_TEXTURE3);
+    wave.uploadFoamToGPU(foamTex);
+    waterShader->setInt("foamMap", 3);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, reflectionTex);
+    waterShader->setInt("reflectionTex", 4);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, refractionTex);
+    waterShader->setInt("refractionTex", 5);
 
     glm::mat4 model = glm::mat4(1.0f);
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
@@ -854,29 +1037,45 @@ void renderWaterSurface(float time) {
     waterShader->setVec3("lightColor", glm::vec3(1.0f, 1.0f, 1.0f));
     {
         GLint loc = glGetUniformLocation(waterShader->ID, "rainDrops");
-        glUniform3fv(loc, (int)rainDrops.size(), glm::value_ptr(rainDrops[0]));
+        glUniform3fv(loc, (int)rainDrops.size(), rainDrops.size() > 0 ? glm::value_ptr(rainDrops[0]) : nullptr);
     }
     {
         GLint loc = glGetUniformLocation(waterShader->ID, "rainCount");
         glUniform1i(loc, (int)rainDrops.size());
     }
+
+
+    glm::vec3 reflectedPos = cameraPos;
+    reflectedPos.y = 2 * waterHeight - cameraPos.y;
+    glm::vec3 reflectedFront = cameraFront;
+    reflectedFront.y = -cameraFront.y;
+    glm::mat4 reflectionView = glm::lookAt(reflectedPos, reflectedPos + reflectedFront, cameraUp);
+    glm::mat4 refractionModel =
+        glm::translate(glm::mat4(1.0f), {0, waterHeight, 0}) *
+        glm::scale(glm::mat4(1.0f), {1, 1.0f / 1.33f, 1}) *
+        glm::translate(glm::mat4(1.0f), {0, -waterHeight, 0}) *
+        model;
+    waterShader->setFloat("waterHeight", waterHeight);
+    waterShader->setMat4("refractionModel", refractionModel);
+    waterShader->setMat4("reflectionView", reflectionView);
+
     glBindVertexArray(waterVAO);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDrawArrays(GL_TRIANGLES, 0, waterVertices.size());
 }
 
-// --- 3. Render Foam Texture ---
-void renderFoamTexture() {
-    // 可在 water.frag 裡加上基於高度的白沫色彩
+void renderReflectionTexture() {
+    glBindFramebuffer(GL_FRAMEBUFFER, reflectionFBO);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    renderPool(1);
+    renderBird(1);
 }
 
-// --- 4. Render Extra Effects ---
-void renderExtraEffects(float time) {
-    // 可加入 particle 或 alpha map 效果
-}
-
-// --- 5. Render Full Scene ---
-void renderScene(float time) {
-    // 可在 water.frag 中加入 reflection/refraction 與 Fresnel
+void renderRefractionTexture() {
+    glBindFramebuffer(GL_FRAMEBUFFER, refractionFBO);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    renderPool(2);
 }
 

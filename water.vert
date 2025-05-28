@@ -10,8 +10,18 @@ uniform mat4 projection;
 uniform vec3 rainDrops[32];
 uniform int rainCount;
 
+uniform float waterHeight;
+uniform mat4 reflectionView;
+uniform mat4 refractionModel;
+
 uniform sampler2D heightMap;
 uniform sampler2D normalMap;
+
+out vec3 worldPos;
+out vec3 normal;
+out vec2 uv;
+out vec2 reflectionCoord;
+out vec2 refractionCoord;
 
 float baseHeight(vec2 uv) {
     return texture(heightMap, uv).r;
@@ -41,13 +51,11 @@ float sumRipple(vec2 p, float time) {
     return h;
 }
 
-out vec3 worldPos;
-out vec3 normal;
-
 void main() {
     vec3 pos = aPos;
-    vec2 uv = (pos.xz + 1.0) / 2.0;
+    uv = (pos.xz + 1.0) / 2.0;
     float h = baseHeight(uv);
+    //normal = normalize(texture(normalMap, uv).rgb * 2.0 - 1.0);
 
     h += sumRipple(uv, time);
     pos.y = h;
@@ -67,4 +75,18 @@ void main() {
 
     worldPos = vec3(model * vec4(pos, 1.0));
     gl_Position = projection * view * vec4(worldPos, 1.0);
+
+    vec4 undisplacedPos = vec4(aPos, 1.);
+    undisplacedPos.y = waterHeight;
+    float refl_strength = .1;
+    float refr_strength = .1;
+    vec4 screenPos = projection * reflectionView * vec4(vec3(model * undisplacedPos), 1.0);
+    screenPos /= screenPos.w;
+    reflectionCoord = screenPos.xy * 0.5 + 0.5;
+    reflectionCoord += refl_strength * normal.xz / screenPos.z;
+    screenPos = projection * view * vec4(vec3(refractionModel * undisplacedPos), 1.0);
+    screenPos /= screenPos.w;
+    refractionCoord  = screenPos.xy * 0.5 + 0.5;
+    refractionCoord += refr_strength * normal.xz / screenPos.z;
 }
+

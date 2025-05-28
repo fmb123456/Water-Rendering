@@ -5,6 +5,7 @@ layout(location = 4) in vec2 aTexCoord;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+uniform vec4 clipPlane;
 out vec3 Normal;
 out vec3 FragPos;
 out vec2 TexCoord;
@@ -13,4 +14,5 @@ void main() {
     Normal = mat3(transpose(inverse(model))) * aNormal;
     gl_Position = projection * view * vec4(FragPos, 1.0);
     TexCoord = aTexCoord;
+    gl_ClipDistance[0] = dot(FragPos, clipPlane.xyz) + clipPlane.w;
 }
