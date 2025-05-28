@@ -32,6 +32,15 @@ float rippleContribution(vec2 p, vec2 dropP, float dt) {
     return 0.1 * damp * cos(k*dist - omega*dt) / (1.0 + dist*10.0);
 }
 
+float sumRipple(vec2 p, float time) {
+    float h = 0.0;
+    for (int i = 0; i < rainCount; ++i) {
+        float dt = time - rainDrops[i].z;
+        h += rippleContribution(p, vec2(rainDrops[i].x, rainDrops[i].y), dt);
+    }
+    return h;
+}
+
 out vec3 worldPos;
 out vec3 normal;
 
@@ -40,13 +49,22 @@ void main() {
     vec2 uv = (pos.xz + 1.0) / 2.0;
     float h = baseHeight(uv);
 
-    for (int i = 0; i < rainCount; ++i) {
-        h += rippleContribution(uv, vec2(rainDrops[i].x, rainDrops[i].y), time - rainDrops[i].z);
-    }
+    h +=sumRipple(uv, time);
 
     pos.y = h;
 
-    normal = normalize(texture(normalMap, uv).rgb * 2.0 - 1.0);
+    float eps = 0.001;
+    float hL = baseHeight(uv + vec2(-eps,0)) +
+               sumRipple(uv+vec2(-eps,0), time);
+    float hR = baseHeight(uv + vec2(+eps,0)) +
+               sumRipple(uv+vec2(+eps,0), time);
+    float hD = baseHeight(uv + vec2(0,-eps)) +
+               sumRipple(uv+vec2(0,-eps), time);
+    float hU = baseHeight(uv + vec2(0,+eps)) +
+               sumRipple(uv+vec2(0,+eps), time);
+    vec3 dx = vec3(2.0*eps, hR - hL, 0.0);
+    vec3 dz = vec3(0.0, hU - hD, 2.0*eps);
+    normal = normalize(cross(dz, dx));
 
     worldPos = vec3(model * vec4(pos, 1.0));
     gl_Position = projection * view * vec4(worldPos, 1.0);
