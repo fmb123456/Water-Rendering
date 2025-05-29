@@ -5,8 +5,8 @@ out vec4 FragColor;
 in vec3 worldPos;
 in vec3 normal;
 in vec2 uv;
-in vec2 reflectionCoord;
-in vec2 refractionCoord;
+in vec4 reflectionPos;
+in vec4 refractionPos;
 
 uniform vec3 viewPos;
 uniform vec3 lightPos;
@@ -30,6 +30,16 @@ uniform mat4 inverseProjection;
 uniform mat4 inverseView;
 
 void main() {
+    vec3 dx = dFdx(worldPos);
+    vec3 dy = dFdy(worldPos);
+    vec3 normal = normalize(cross(dy, dx));
+    float refl_strength = .03;
+    float refr_strength = .03;
+    vec2 reflectionCoord = reflectionPos.xy * 0.5 + 0.5;
+    reflectionCoord += refl_strength * normal.xz / reflectionPos.z;
+    vec2 refractionCoord  = refractionPos.xy * 0.5 + 0.5;
+    refractionCoord += refr_strength * normal.xz / refractionPos.z;
+
     vec3 lightDir = normalize(lightPos - worldPos);
     vec3 viewDir = normalize(viewPos - worldPos);
     vec3 reflectDir = reflect(-lightDir, normal);

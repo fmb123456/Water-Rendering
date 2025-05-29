@@ -25,6 +25,7 @@ void renderPool(int mode = 0);
 void renderBird(int mode = 0);
 void renderReflectionTexture();
 void renderRefractionTexture();
+void renderRainDrops();
 void processInput(GLFWwindow* window);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -38,15 +39,20 @@ unsigned int groundVAO = 0, waterVAO = 0;
 unsigned int groundVBO = 0, waterVBO = 0;
 GLFWwindow* window;
 std::vector<glm::vec3> waterVertices;
-std::vector<glm::vec3> rainDrops;
-const int rainBound = 32, rainDropFreq = 10;
 Shader *waterShader, *groundShader;
+
+// Rain
+const int maxDrops = 1000;
+const int maxSplashes = 100;
+const int rainDropFreq = 3;
+const float skyHeight = 1.0;
+const float rainSpeed = 1.;
 
 unsigned int skyboxVAO, skyboxVBO;
 unsigned int cubemapTexture;
 Shader *skyboxShader;
 
-const float waterHeight = 0.14f;
+float waterHeight = 0.05f;
 unsigned int reflectionFBO, refractionFBO;
 unsigned int reflectionTex, refractionTex;
 unsigned int refractionDepthTex;
@@ -70,18 +76,36 @@ void loadObject(object &obj, std::string filePath);
 Shader *poolShader, *birdShader;
 unsigned int stoneTextureID, woodTextureID, foamTextureID;
 
+Shader *raindropShader;
+unsigned int rainTextureID;
+
 unsigned int heightTex, normalTex, foamTex;
 
 const int GRID_SIZE = 300;
 const float LEN = 1.f;
 
 // Camera
-glm::vec3 cameraPos = glm::vec3(0.0f, 0.5f, 2.0f);
-glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+//glm::vec3 cameraPos = glm::vec3(0.0f, 0.5f, 2.0f);
+glm::vec3 cameraPos = glm::vec3(1.09323, 0.338071, -0.664188);
+//glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+glm::vec3 cameraFront = glm::vec3(-0.870244, -0.240227, 0.430076);
 glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
 float lastX = 400.0f, lastY = 300.0f;
 bool firstMouse = true;
 float yaw = -90.0f, pitch = 0.0f, fov = 45.0f;
+
+float gaussianRandom() {
+    static std::default_random_engine eng;
+    static std::normal_distribution<float> dist(0.0f, 1.0f);
+    return dist(eng);
+}
+
+float uniformRandom() {
+    static std::default_random_engine eng;
+    static std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    return dist(eng);
+}
+
 
 // Wave Simulate
 struct Wave {
@@ -89,7 +113,7 @@ struct Wave {
 
     const int N = 128; // Grid
     const float L = 2 * LEN; // Simulate size
-    const float A = 0.03f; // Amplitude
+    const float A = 0.05f; // Amplitude
     const float G = 9.81f;
     const glm::vec2 wind = glm::vec2(2.0f, 2.0f);
     const float foamThreshold = -1.f;
@@ -114,12 +138,6 @@ struct Wave {
         in = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * N * N);
         out = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * N * N);
         plan = fftwf_plan_dft_2d(N, N, in, out, FFTW_BACKWARD, FFTW_MEASURE);
-    }
-
-    float gaussianRandom() {
-        static std::default_random_engine eng;
-        static std::normal_distribution<float> dist(0.0f, 1.0f);
-        return dist(eng);
     }
 
     float phillips(glm::vec2 k) {
@@ -180,13 +198,13 @@ struct Wave {
     void computeHeightMap() {
         std::memcpy(in, hkt.data(), sizeof(fftwf_complex) * N * N);
         fftwf_execute(plan);
-        //float Sum = 0.;
+        float Sum = 0.;
         for (int i = 0; i < N * N; ++i) {
             heightMap[i] = out[i][0];
             heightMap[i] = abs(heightMap[i]);
-            //Sum += heightMap[i];
+            Sum += heightMap[i];
         }
-        //std::cerr << Sum / (N * N) << '\n';
+        waterHeight = Sum / (N * N);
     }
 
     void computeNormals(float spacing) {
@@ -258,7 +276,7 @@ struct Wave {
     void update(float t) {
         updateFrequencyDomain(t);
         computeHeightMap();
-        computeNormals(L / N);
+        //computeNormals(L / N);
         computeDisplacements();
         computeFoam();
         blurFoamMap();
@@ -270,6 +288,7 @@ struct Wave {
     }
 
     void uploadNormalsToGPU(GLuint texID) {
+        return;
         std::vector<glm::vec3> rgbData(N * N);
         for (int i = 0; i < N * N; ++i)
             rgbData[i] = normalMap[i] * 0.5f + 0.5f;
@@ -284,6 +303,73 @@ struct Wave {
     }
 } wave;
 
+struct RainingSystem {
+    std::vector<glm::vec3> drops;
+    std::vector<glm::vec3> splashes;
+    unsigned int quadVAO, quadVBO, instanceVBO;
+    int dropCnt = 0;
+    float timestamp = 0.0f;
+    void init() {
+        float quadVertices[] = {
+            -0.5f, -0.5f,
+            0.5f, -0.5f,
+            -0.5f,  0.5f,
+            0.5f,  0.5f,
+        };
+
+        glGenVertexArrays(1, &quadVAO);
+        glGenBuffers(1, &quadVBO);
+        glGenBuffers(1, &instanceVBO);
+
+        glBindVertexArray(quadVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), quadVertices, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+
+        glBindBuffer(GL_ARRAY_BUFFER, instanceVBO);
+        glBufferData(GL_ARRAY_BUFFER, maxDrops * sizeof(glm::vec3), nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+        glVertexAttribDivisor(1, 1);
+    }
+
+    void addRandomDrop(int num = 5) {
+        //std::cerr << "DROPCNT " << dropCnt << '\n';
+        for (int _ = 0; _ < num; ++_) {
+            if (dropCnt == 0) {
+                if (drops.size() >= maxDrops)
+                    return;
+                dropCnt = rainDropFreq;
+                float x = uniformRandom() * 2 * LEN - LEN, z = uniformRandom() * 2 * LEN - LEN;
+                drops.push_back(glm::vec3(x, skyHeight, z));
+            } else {
+                dropCnt--;
+            }
+        }
+    }
+
+    void update(float time) {
+        //std::cerr << "TIME " << time << '\n';
+        for (int i = 0; i < (int)drops.size(); ++i) {
+            drops[i].y -= rainSpeed * (time - timestamp);
+            if (drops[i].y < waterHeight) {
+                splashes.emplace_back(drops[i].x, drops[i].z, time);
+                //std::cerr << drops[i].x << ' ' << drops[i].z << '\n';
+                if (splashes.size() > maxSplashes)
+                    splashes.erase(splashes.begin());
+                drops[i] = drops.back();
+                drops.pop_back();
+                --i;
+            }
+        }
+        timestamp = time;
+
+        glBindBuffer(GL_ARRAY_BUFFER, instanceVBO);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, drops.size() * sizeof(glm::vec3), drops.data());
+    }
+} rainingSystem;
+
 // --- Main ---
 int main() {
     initOpenGL();
@@ -295,7 +381,6 @@ int main() {
     float time = 0.0f;
     std::default_random_engine eng;
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    int dropCnt = (int)(dist(eng) * rainDropFreq);
     while (!glfwWindowShouldClose(window)) {
         time = (float)glfwGetTime();
         processInput(window);
@@ -309,24 +394,19 @@ int main() {
         glClearColor(0.1f, 0.3f, 0.5f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        rainingSystem.addRandomDrop();
+        rainingSystem.update(time);
+
         renderSkybox();
         //renderGround();
         renderWaterSurface(time);
-        if (dropCnt == 0) {
-            dropCnt = (int)(dist(eng) * rainDropFreq);
-            rainDrops.push_back(glm::vec3(dist(eng), dist(eng), time));
-            std::cerr << rainDrops.back()[0] << ' ' << rainDrops.back()[1] << ' ' << rainDrops.back()[2] << '\n';
-            if (rainDrops.size() > rainBound) {
-                rainDrops.erase(rainDrops.begin());
-            }
-        } else {
-            dropCnt--;
-        }
         renderPool();
         renderBird();
+        renderRainDrops();
         
         glfwSwapBuffers(window);
         glfwPollEvents();
+        std::cerr << cameraPos.x << ' ' << cameraPos.y << ' ' << cameraPos.z << ' ' << cameraFront.x << ' ' << cameraFront.y << ' ' << cameraFront.z << '\n';
     }
     glfwTerminate();
     return 0;
@@ -480,12 +560,16 @@ void initOpenGL() {
     loadObject(bird, "model/bird.glb");
     birdShader = new Shader("bird.vert", "bird.frag");
 
+    // rain
+    raindropShader = new Shader("raindrop.vert", "raindrop.frag");
+
     // texture
     stoneTextureID = loadTexture("texture/stone.png");
     woodTextureID = loadTexture("texture/wood.jpg");
-    foamTextureID = loadTexture("texture/foam_gray.jpeg");
+    rainTextureID = loadTexture("texture/waterdrop.png");
 
     initReflectionRefraction();
+    rainingSystem.init();
 }
 
 unsigned int loadTexture(std::string filePath) {
@@ -811,6 +895,7 @@ void renderPool(int mode) {
 
     glm::mat4 model = glm::mat4(1.0f);
     model = glm::scale(model, glm::vec3(0.12));
+    model = glm::translate(model, glm::vec3(0., -0.8, 0.));
 
     if (mode == 0) { // render scene
         glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
@@ -1064,11 +1149,11 @@ void renderWaterSurface(float time) {
     waterShader->setVec3("lightColor", glm::vec3(1.0f, 1.0f, 1.0f));
     {
         GLint loc = glGetUniformLocation(waterShader->ID, "rainDrops");
-        glUniform3fv(loc, (int)rainDrops.size(), rainDrops.size() > 0 ? glm::value_ptr(rainDrops[0]) : nullptr);
+        glUniform3fv(loc, (int)rainingSystem.splashes.size(), rainingSystem.splashes.size() > 0 ? glm::value_ptr(rainingSystem.splashes[0]) : nullptr);
     }
     {
         GLint loc = glGetUniformLocation(waterShader->ID, "rainCount");
-        glUniform1i(loc, (int)rainDrops.size());
+        glUniform1i(loc, (int)rainingSystem.splashes.size());
     }
 
 
@@ -1104,5 +1189,17 @@ void renderRefractionTexture() {
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     renderPool(2);
+}
+
+void renderRainDrops() {
+    std::cerr << rainingSystem.drops.size() << ' ' << rainingSystem.splashes.size() << '\n';
+    raindropShader->use();
+    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+    glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
+    raindropShader->setMat4("view", view);
+    raindropShader->setMat4("projection", projection);
+    glBindTexture(GL_TEXTURE_2D, rainTextureID);
+    glBindVertexArray(rainingSystem.quadVAO);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, rainingSystem.drops.size());
 }
 
