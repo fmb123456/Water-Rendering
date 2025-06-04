@@ -10,11 +10,11 @@
 #include <complex>
 #include <random>
 #include <fftw3.h>
-#include "shader.h"
+#include <shader/shader.h>
 #define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "tiny_gltf.h"
+#include <stb/tiny_gltf.h>
 
 // --- Function Prototypes ---
 void initOpenGL();
@@ -437,7 +437,7 @@ void initOpenGL() {
     glBufferData(GL_ARRAY_BUFFER, sizeof(groundVertices), groundVertices, GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-    groundShader = new Shader("ground.vert", "ground.frag");
+    groundShader = new Shader("shader/ground.vert", "shader/ground.frag");
 
     // Create water grid
     for (int z = 0; z < GRID_SIZE - 1; ++z) {
@@ -456,7 +456,7 @@ void initOpenGL() {
             waterVertices.push_back(glm::vec3(x0, 0.0f, z1));
         }
     }
-    waterShader = new Shader("water.vert", "water.frag");
+    waterShader = new Shader("shader/water.vert", "shader/water.frag");
 
     glGenVertexArrays(1, &waterVAO);
     glGenBuffers(1, &waterVBO);
@@ -532,7 +532,7 @@ void initOpenGL() {
     cubemapTexture = loadCubemap(faces);
     
     // load skybox shader
-    skyboxShader = new Shader("skybox.vert", "skybox.frag");
+    skyboxShader = new Shader("shader/skybox.vert", "shader/skybox.frag");
 
 
     // init wave shape texture
@@ -554,14 +554,14 @@ void initOpenGL() {
 
     // pool
     loadObject(pool, "model/terrain.glb");
-    poolShader = new Shader("pool.vert", "pool.frag");
+    poolShader = new Shader("shader/pool.vert", "shader/pool.frag");
 
     // bird
     loadObject(bird, "model/bird.glb");
-    birdShader = new Shader("bird.vert", "bird.frag");
+    birdShader = new Shader("shader/bird.vert", "shader/bird.frag");
 
     // rain
-    raindropShader = new Shader("raindrop.vert", "raindrop.frag");
+    raindropShader = new Shader("shader/raindrop.vert", "shader/raindrop.frag");
 
     // texture
     stoneTextureID = loadTexture("texture/stone.png");
