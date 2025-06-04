@@ -81,7 +81,7 @@ unsigned int rainTextureID;
 
 unsigned int heightTex, normalTex, foamTex;
 
-const int GRID_SIZE = 300;
+const int GRID_SIZE = 1000;
 const float LEN = 1.f;
 
 // Camera
@@ -406,7 +406,7 @@ int main() {
         
         glfwSwapBuffers(window);
         glfwPollEvents();
-        std::cerr << cameraPos.x << ' ' << cameraPos.y << ' ' << cameraPos.z << ' ' << cameraFront.x << ' ' << cameraFront.y << ' ' << cameraFront.z << '\n';
+        // std::cerr << cameraPos.x << ' ' << cameraPos.y << ' ' << cameraPos.z << ' ' << cameraFront.x << ' ' << cameraFront.y << ' ' << cameraFront.z << '\n';
     }
     glfwTerminate();
     return 0;
@@ -894,8 +894,8 @@ void renderPool(int mode) {
     }
 
     glm::mat4 model = glm::mat4(1.0f);
-    model = glm::scale(model, glm::vec3(0.12));
-    model = glm::translate(model, glm::vec3(0., -0.8, 0.));
+    model = glm::scale(model, glm::vec3(0.1f));
+    model = glm::translate(model, glm::vec3(0.f, -0.8f, 0.f));
 
     if (mode == 0) { // render scene
         glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
@@ -1192,7 +1192,7 @@ void renderRefractionTexture() {
 }
 
 void renderRainDrops() {
-    std::cerr << rainingSystem.drops.size() << ' ' << rainingSystem.splashes.size() << '\n';
+    // std::cerr << rainingSystem.drops.size() << ' ' << rainingSystem.splashes.size() << '\n';
     raindropShader->use();
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
     glm::mat4 projection = glm::perspective(glm::radians(fov), 800.0f / 600.0f, 0.1f, 100.0f);
